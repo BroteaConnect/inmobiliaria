@@ -1,13 +1,38 @@
 {
-  "$comment": "Modelo de datos del sistema inmobiliario. Se aplica con: node scripts/pb-schema.mjs inmobiliaria pb/schema.json (desde la raíz de la fábrica). Aditivo: nunca borra campos existentes.",
+  "$comment": "Modelo de datos del sistema inmobiliario. Se aplica con: node scripts/pb-schema.mjs inmobiliaria pb/schema.json (desde la raíz de la fábrica). Aditivo: nunca borra campos existentes. OJO: PocketBase >=0.23 no crea created/updated solo — todo sort por fecha exige declarar los campos autodate de abajo.",
   "collections": [
     {
       "name": "propietarios",
       "fields": [
-        { "name": "nombre", "type": "text", "required": true },
-        { "name": "telefono", "type": "text" },
-        { "name": "email", "type": "email" },
-        { "name": "notas", "type": "text" }
+        {
+          "name": "nombre",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "telefono",
+          "type": "text"
+        },
+        {
+          "name": "email",
+          "type": "email"
+        },
+        {
+          "name": "notas",
+          "type": "text"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": false
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": true
+        }
       ],
       "rules": {
         "list": "@request.auth.id != \"\"",
@@ -20,20 +45,83 @@
     {
       "name": "propiedades",
       "fields": [
-        { "name": "titulo", "type": "text", "required": true },
-        { "name": "direccion", "type": "text" },
-        { "name": "municipio", "type": "text" },
-        { "name": "precio", "type": "number" },
-        { "name": "habitaciones", "type": "number" },
-        { "name": "banos", "type": "number" },
-        { "name": "superficie", "type": "number" },
-        { "name": "descripcion", "type": "text" },
-        { "name": "estado", "type": "select", "maxSelect": 1,
-          "values": ["borrador", "publicada", "reservada", "vendida"] },
-        { "name": "fotos", "type": "file", "maxSelect": 10, "maxSize": 5242880,
-          "mimeTypes": ["image/jpeg", "image/png", "image/webp", "image/svg+xml"],
-          "thumbs": ["600x400"] },
-        { "name": "propietario", "type": "relation", "collection": "propietarios", "maxSelect": 1 }
+        {
+          "name": "titulo",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "direccion",
+          "type": "text"
+        },
+        {
+          "name": "municipio",
+          "type": "text"
+        },
+        {
+          "name": "precio",
+          "type": "number"
+        },
+        {
+          "name": "habitaciones",
+          "type": "number"
+        },
+        {
+          "name": "banos",
+          "type": "number"
+        },
+        {
+          "name": "superficie",
+          "type": "number"
+        },
+        {
+          "name": "descripcion",
+          "type": "text"
+        },
+        {
+          "name": "estado",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "borrador",
+            "publicada",
+            "reservada",
+            "vendida"
+          ]
+        },
+        {
+          "name": "fotos",
+          "type": "file",
+          "maxSelect": 10,
+          "maxSize": 5242880,
+          "mimeTypes": [
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/svg+xml"
+          ],
+          "thumbs": [
+            "600x400"
+          ]
+        },
+        {
+          "name": "propietario",
+          "type": "relation",
+          "collection": "propietarios",
+          "maxSelect": 1
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": false
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": true
+        }
       ],
       "rules": {
         "list": "estado = \"publicada\" || @request.auth.id != \"\"",
@@ -46,15 +134,63 @@
     {
       "name": "leads",
       "fields": [
-        { "name": "nombre", "type": "text", "required": true },
-        { "name": "telefono", "type": "text" },
-        { "name": "email", "type": "email" },
-        { "name": "mensaje", "type": "text" },
-        { "name": "propiedad", "type": "relation", "collection": "propiedades", "maxSelect": 1 },
-        { "name": "etapa", "type": "select", "maxSelect": 1,
-          "values": ["nuevo", "contactado", "visita", "oferta", "reservado", "vendido", "nutriendo"] },
-        { "name": "origen", "type": "text" },
-        { "name": "criterios", "type": "text" }
+        {
+          "name": "nombre",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "telefono",
+          "type": "text"
+        },
+        {
+          "name": "email",
+          "type": "email"
+        },
+        {
+          "name": "mensaje",
+          "type": "text"
+        },
+        {
+          "name": "propiedad",
+          "type": "relation",
+          "collection": "propiedades",
+          "maxSelect": 1
+        },
+        {
+          "name": "etapa",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "nuevo",
+            "contactado",
+            "visita",
+            "oferta",
+            "reservado",
+            "vendido",
+            "nutriendo"
+          ]
+        },
+        {
+          "name": "origen",
+          "type": "text"
+        },
+        {
+          "name": "criterios",
+          "type": "text"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": false
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": true
+        }
       ],
       "rules": {
         "list": "@request.auth.id != \"\"",
@@ -67,10 +203,40 @@
     {
       "name": "actividades",
       "fields": [
-        { "name": "lead", "type": "relation", "collection": "leads", "maxSelect": 1 },
-        { "name": "tipo", "type": "select", "maxSelect": 1,
-          "values": ["nota", "llamada", "email", "whatsapp", "visita"] },
-        { "name": "nota", "type": "text" }
+        {
+          "name": "lead",
+          "type": "relation",
+          "collection": "leads",
+          "maxSelect": 1
+        },
+        {
+          "name": "tipo",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "nota",
+            "llamada",
+            "email",
+            "whatsapp",
+            "visita"
+          ]
+        },
+        {
+          "name": "nota",
+          "type": "text"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": false
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": true
+        }
       ],
       "rules": {
         "list": "@request.auth.id != \"\"",
