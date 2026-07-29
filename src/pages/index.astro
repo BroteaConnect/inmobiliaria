@@ -40,7 +40,9 @@ import Layout from '../layouts/Layout.astro';
       descripcion: string; fotos: string[];
     }
 
-    const eur = (n: number) => n?.toLocaleString('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) ?? '';
+    // El mercado de la clienta opera en dirhams.
+    const eur = (n: number) => (n != null && Number.isFinite(n)
+      ? `${n.toLocaleString('es-ES', { maximumFractionDigits: 0 })} AED` : '');
     const foto = (p: Propiedad, thumb = true) =>
       p.fotos?.length ? fileUrl(p, p.fotos[0]) + (thumb ? '?thumb=600x400' : '') : '';
 
