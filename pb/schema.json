@@ -180,6 +180,10 @@
           "type": "text"
         },
         {
+          "name": "ultimo_contacto",
+          "type": "date"
+        },
+        {
           "name": "created",
           "type": "autodate",
           "onCreate": true,
@@ -223,6 +227,36 @@
         },
         {
           "name": "nota",
+          "type": "text"
+        },
+        {
+          "name": "direccion",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "saliente",
+            "entrante"
+          ]
+        },
+        {
+          "name": "asunto",
+          "type": "text"
+        },
+        {
+          "name": "estado_envio",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "registrado",
+            "enviado",
+            "entregado",
+            "abierto",
+            "click",
+            "error"
+          ]
+        },
+        {
+          "name": "mensaje_id",
           "type": "text"
         },
         {

@@ -42,6 +42,22 @@ datos, el seed y la documentación; el CRM vive en
 - El tema visual es `brotea@2.0.0` (lockfile `brotea.json`); para la marca de
   la clienta: crear su tema en el catálogo de la fábrica y `brotea theme`.
 
+## Seguimiento de contactos (2026-07-29)
+
+- Toda interacción con un lead pasa por `registrarContacto()` (CRM api.ts):
+  crea una `actividad` (canal, dirección, nota) y sella
+  `leads.ultimo_contacto`. La tarjeta muestra "hace X días", marca en ámbar
+  los leads sin contacto >2 días (`desatendido()`) y despliega el historial.
+- **Email real con seguimiento**: el CRM llama a `POST
+  api.brotea.dev/send-email` (secreto compartido en `PUBLIC_OUTBOUND_SECRET`);
+  el chasis envía por Brevo con un Message-ID propio, registra la actividad y
+  Brevo devuelve los eventos a `POST /brevo-webhook`, que actualiza
+  `estado_envio` (enviado→entregado→abierto→click, sin degradar).
+  Las credenciales SMTP nunca llegan al navegador.
+- **Límite honesto de WhatsApp**: se registra que la agente inició el
+  contacto (el click), no la entrega ni la respuesta. Eso exige la WhatsApp
+  Business Cloud API (fase 2: cuenta Meta verificada + plantillas).
+
 ## Deuda consciente / siguiente iteración
 
 - Motor de seguimiento (recordatorios 48 h, matching, resumen diario): cron
