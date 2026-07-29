@@ -1,0 +1,159 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Inmobiliaria — propiedades en venta">
+  <section class="hero">
+    <h1>Encuentra tu próxima casa</h1>
+    <p class="lede">
+      Gestión personal y cercana: cada propiedad la conocemos de primera mano.
+      Déjanos tus datos en la que te interese y te llamamos hoy.
+    </p>
+  </section>
+
+  <div id="catalogo" class="catalogo" aria-live="polite">
+    <p class="cargando">Cargando propiedades…</p>
+  </div>
+
+  <!-- Ficha + formulario de interés (se rellena al elegir propiedad) -->
+  <dialog id="ficha">
+    <button class="cerrar" id="cerrar-ficha" aria-label="Cerrar">×</button>
+    <div id="ficha-contenido"></div>
+    <form id="interes">
+      <h3>Me interesa esta propiedad</h3>
+      <input type="hidden" name="propiedad" />
+      <label>Nombre <input name="nombre" required autocomplete="name" /></label>
+      <label>Teléfono <input name="telefono" required autocomplete="tel" /></label>
+      <label>Email <input name="email" type="email" autocomplete="email" /></label>
+      <label>Mensaje <textarea name="mensaje" rows="3" placeholder="Me gustaría visitarla…"></textarea></label>
+      <button type="submit">Quiero que me llamen</button>
+      <p id="interes-status" role="status"></p>
+    </form>
+  </dialog>
+
+  <script>
+    import { list, create, fileUrl, pbUrl } from '../lib/pb';
+
+    interface Propiedad {
+      id: string; collectionId: string; titulo: string; municipio: string;
+      precio: number; habitaciones: number; banos: number; superficie: number;
+      descripcion: string; fotos: string[];
+    }
+
+    const eur = (n: number) => n?.toLocaleString('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) ?? '';
+    const foto = (p: Propiedad, thumb = true) =>
+      p.fotos?.length ? fileUrl(p, p.fotos[0]) + (thumb ? '?thumb=600x400' : '') : '';
+
+    const cat = document.getElementById('catalogo')!;
+    const ficha = document.getElementById('ficha') as HTMLDialogElement;
+    const fichaBody = document.getElementById('ficha-contenido')!;
+    const form = document.getElementById('interes') as HTMLFormElement;
+    const status = document.getElementById('interes-status')!;
+    let props: Propiedad[] = [];
+
+    function render() {
+      if (!props.length) {
+        cat.innerHTML = '<p class="cargando">Pronto publicaremos nuevas propiedades. Vuelve en unos días.</p>';
+        return;
+      }
+      cat.innerHTML = props.map((p) => `
+        <article class="card" data-id="${p.id}">
+          ${foto(p) ? `<img src="${foto(p)}" alt="${p.titulo}" loading="lazy" />` : '<div class="sinfoto">📷</div>'}
+          <div class="card-body">
+            <h2>${p.titulo}</h2>
+            <p class="meta">${p.municipio ?? ''} · ${p.habitaciones ?? '–'} hab · ${p.superficie ?? '–'} m²</p>
+            <p class="precio">${eur(p.precio)}</p>
+            <button class="ver" data-id="${p.id}">Ver ficha</button>
+          </div>
+        </article>`).join('');
+      cat.querySelectorAll<HTMLButtonElement>('.ver').forEach((b) =>
+        b.addEventListener('click', () => abrir(b.dataset.id!)));
+    }
+
+    function abrir(id: string) {
+      const p = props.find((x) => x.id === id)!;
+      fichaBody.innerHTML = `
+        ${foto(p, false) ? `<img src="${foto(p, false)}" alt="${p.titulo}" />` : ''}
+        <h2>${p.titulo}</h2>
+        <p class="meta">${p.municipio ?? ''} · ${p.habitaciones ?? '–'} hab · ${p.banos ?? '–'} baños · ${p.superficie ?? '–'} m²</p>
+        <p class="precio">${eur(p.precio)}</p>
+        <p>${p.descripcion ?? ''}</p>`;
+      (form.elements.namedItem('propiedad') as HTMLInputElement).value = p.id;
+      status.textContent = '';
+      form.hidden = false;
+      ficha.showModal();
+    }
+
+    document.getElementById('cerrar-ficha')!.addEventListener('click', () => ficha.close());
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form)) as Record<string, string>;
+      status.textContent = 'Enviando…';
+      try {
+        await create('leads', {
+          nombre: data.nombre, telefono: data.telefono, email: data.email,
+          mensaje: data.mensaje, propiedad: data.propiedad, etapa: 'nuevo', origen: 'web',
+        });
+        // Aviso inmediato al topic del proyecto (chasis: requirements-api → Telegram)
+        const p = props.find((x) => x.id === data.propiedad);
+        fetch('https://api.brotea.dev/requirements', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            project: 'inmobiliaria', source: 'lead_web',
+            submitted_by: `${data.nombre} <${data.telefono}>`,
+            content: `LEAD para "${p?.titulo}": ${data.mensaje || '(sin mensaje)'} — ${data.email || 'sin email'}`,
+          }),
+        }).catch(() => {});
+        form.reset();
+        status.textContent = '¡Recibido! Te llamamos muy pronto.';
+      } catch {
+        status.textContent = 'No se pudo enviar — inténtalo de nuevo o llámanos.';
+      }
+    });
+
+    if (pbUrl()) {
+      list<Propiedad>('propiedades', { filter: 'estado="publicada"', sort: '-created', perPage: '50' })
+        .then((r) => { props = r.items; render(); })
+        .catch(() => { cat.innerHTML = '<p class="cargando">No se pudo cargar el catálogo.</p>'; });
+    }
+  </script>
+
+  <!-- El catálogo se genera desde JS: estilos globales a propósito
+       (los estilos scoped de Astro no alcanzan nodos creados en runtime). -->
+  <style is:global>
+    .hero h1 { font-size: 2.4rem; margin: 0 0 .5rem; }
+    .hero .lede { color: var(--muted); font-size: 1.1rem; max-width: 52ch; }
+    .catalogo { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+                gap: var(--space-5); margin-top: var(--space-6); }
+    .cargando { color: var(--muted); }
+    .card { background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden;
+            display: flex; flex-direction: column; }
+    .card img { width: 100%; aspect-ratio: 3/2; object-fit: cover; display: block; }
+    .sinfoto { aspect-ratio: 3/2; display: grid; place-items: center; font-size: 2rem;
+               background: var(--bg); color: var(--muted); }
+    .card-body { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+    .card h2 { font-size: 1.1rem; margin: 0; }
+    .meta { color: var(--muted); font-size: .9rem; margin: 0; }
+    .precio { font-family: var(--font-display); font-size: 1.3rem; margin: 0; color: var(--primary); }
+    .ver { align-self: start; background: var(--primary); color: var(--primary-contrast);
+           border: 0; border-radius: var(--radius); padding: .5rem 1.2rem; font: inherit;
+           font-weight: 600; cursor: pointer; }
+    dialog#ficha { border: 1px solid var(--border); border-radius: var(--radius-lg);
+                   background: var(--surface); color: var(--text); max-width: 640px; width: 92vw;
+                   padding: var(--space-5); }
+    dialog#ficha::backdrop { background: rgba(9, 9, 45, .55); }
+    dialog#ficha img { width: 100%; border-radius: var(--radius); }
+    dialog#ficha .cerrar { float: right; background: none; border: 0; font-size: 1.6rem;
+                           cursor: pointer; color: var(--muted); }
+    #interes { margin-top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); }
+    #interes label { font-weight: 600; font-size: .9rem; display: flex; flex-direction: column; gap: 4px; }
+    #interes input, #interes textarea { padding: .55rem; border: 1px solid var(--border);
+      border-radius: var(--radius); font: inherit; background: var(--bg); color: var(--text); }
+    #interes button { align-self: start; background: var(--primary); color: var(--primary-contrast);
+      border: 0; border-radius: var(--radius); padding: .6rem 1.4rem; font: inherit; font-weight: 600;
+      cursor: pointer; }
+    #interes-status { color: var(--ok); min-height: 1.2em; margin: 0; }
+  </style>
+</Layout>

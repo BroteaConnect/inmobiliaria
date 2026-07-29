@@ -1,0 +1,27 @@
+---
+// Nav links. Feature installs insert their entry after the anchor below —
+// do not remove the `brotea:nav` marker.
+---
+
+<nav>
+  <a href="/">Home</a>
+  <!-- brotea:nav -->
+</nav>
+
+<style>
+  nav {
+    display: flex;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  nav :global(a) {
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 600;
+  }
+  nav :global(a:hover) {
+    text-decoration: underline;
+  }
+</style>

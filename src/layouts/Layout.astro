@@ -1,0 +1,33 @@
+---
+import '../styles/theme.css';
+import '../styles/base.css';
+import Nav from '../components/Nav.astro';
+const { title = '__PROJECT_NAME__' } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+    <!-- brotea:head -->
+    <meta name="pb-url" content={import.meta.env.PUBLIC_PB_URL} />
+    <script is:inline defer id="brotea-errors" src="/brotea-errors.js" data-dsn={import.meta.env.PUBLIC_GLITCHTIP_DSN}></script>
+    <script is:inline defer src={import.meta.env.PUBLIC_UMAMI_SRC} data-website-id={import.meta.env.PUBLIC_UMAMI_WEBSITE_ID}></script>
+  </head>
+  <body>
+    <Nav />
+    <main>
+      <slot />
+    </main>
+  </body>
+</html>
+
+<style>
+  main {
+    max-width: var(--container);
+    margin: 0 auto;
+    padding: var(--space-5) var(--space-4);
+  }
+</style>
