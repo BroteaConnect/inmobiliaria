@@ -61,6 +61,7 @@ import Layout from '../layouts/Layout.astro';
       cat.innerHTML = props.map((p) => `
         <article class="card" data-id="${p.id}">
           ${foto(p) ? `<img src="${foto(p)}" alt="${p.titulo}" loading="lazy" />` : '<div class="sinfoto">📷</div>'}
+          ${(p.fotos?.length ?? 0) > 1 ? `<span class="fotos-badge" role="img" aria-label="${p.fotos.length} fotos">📷 ${p.fotos.length}</span>` : ''}
           <div class="card-body">
             <h2>${p.titulo}</h2>
             <p class="meta">${p.municipio ?? ''} · ${p.habitaciones ?? '–'} hab · ${p.superficie ?? '–'} m²</p>
@@ -72,14 +73,81 @@ import Layout from '../layouts/Layout.astro';
         b.addEventListener('click', () => abrir(b.dataset.id!)));
     }
 
+    // Galería del detalle: DOM puro (sin innerHTML) para no interpolar
+    // texto del agente (titulo) en marcado — misma superficie XSS que antes.
+    function galeria(p: Propiedad): HTMLElement | null {
+      const urls = (p.fotos ?? []).map((f) => fileUrl(p, f));
+      if (!urls.length) return null;
+      const total = urls.length;
+      let actual = 0;
+
+      const gal = document.createElement('div');
+      gal.className = 'galeria';
+      const marco = document.createElement('div');
+      marco.className = 'galeria-marco';
+      marco.setAttribute('aria-live', 'polite'); // anuncia el alt al cambiar de foto
+      const principal = document.createElement('img');
+      principal.className = 'galeria-principal';
+      principal.src = urls[0]; // la foto visible sí va a tamaño original
+      principal.alt = `${p.titulo} — foto 1 de ${total}`;
+      marco.append(principal);
+      gal.append(marco);
+      if (total === 1) return gal;
+
+      const minis: HTMLButtonElement[] = [];
+      const ir = (i: number) => {
+        actual = (i + total) % total;
+        principal.src = urls[actual];
+        principal.alt = `${p.titulo} — foto ${actual + 1} de ${total}`;
+        minis.forEach((m, j) => {
+          m.classList.toggle('activa', j === actual);
+          if (j === actual) m.setAttribute('aria-current', 'true');
+          else m.removeAttribute('aria-current');
+        });
+        minis[actual].scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+      };
+
+      const tira = document.createElement('div');
+      tira.className = 'galeria-tira';
+      urls.forEach((u, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'galeria-mini' + (i === 0 ? ' activa' : '');
+        if (i === 0) b.setAttribute('aria-current', 'true');
+        b.setAttribute('aria-label', `Ver foto ${i + 1} de ${total}`);
+        const img = document.createElement('img');
+        img.src = `${u}?thumb=600x400`;
+        img.alt = '';
+        img.loading = 'lazy';
+        b.append(img);
+        b.addEventListener('click', () => ir(i));
+        tira.append(b);
+        minis.push(b);
+      });
+
+      const flecha = (clase: string, etiqueta: string, delta: number) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `galeria-flecha ${clase}`;
+        b.setAttribute('aria-label', etiqueta);
+        b.textContent = delta < 0 ? '‹' : '›';
+        b.addEventListener('click', () => ir(actual + delta));
+        return b;
+      };
+      marco.append(flecha('anterior', 'Foto anterior', -1), flecha('siguiente', 'Foto siguiente', 1));
+      gal.append(tira);
+      return gal;
+    }
+
     function abrir(id: string) {
       const p = props.find((x) => x.id === id)!;
       fichaBody.innerHTML = `
-        ${foto(p, false) ? `<img src="${foto(p, false)}" alt="${p.titulo}" />` : ''}
         <h2>${p.titulo}</h2>
         <p class="meta">${p.municipio ?? ''} · ${p.habitaciones ?? '–'} hab · ${p.banos ?? '–'} baños · ${p.superficie ?? '–'} m²</p>
         <p class="precio">${eur(p.precio)}</p>
         <p>${p.descripcion ?? ''}</p>`;
+      const gal = galeria(p);
+      if (gal) fichaBody.prepend(gal);
       (form.elements.namedItem('propiedad') as HTMLInputElement).value = p.id;
       status.textContent = '';
       form.hidden = false;
@@ -129,7 +197,7 @@ import Layout from '../layouts/Layout.astro';
     .catalogo { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
                 gap: var(--space-5); margin-top: var(--space-6); }
     .cargando { color: var(--muted); }
-    .card { background: var(--surface); border: 1px solid var(--border);
+    .card { position: relative; background: var(--surface); border: 1px solid var(--border);
             border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden;
             display: flex; flex-direction: column;
             transition: transform .18s ease, box-shadow .18s ease; }
@@ -174,6 +242,34 @@ import Layout from '../layouts/Layout.astro';
     #interes button:active { transform: translateY(1px); filter: brightness(.97); }
     #interes button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
     #interes-status { color: var(--ok); min-height: 1.2em; margin: 0; }
+    /* Galería de la ficha: nodos creados en runtime → estilos globales (ver nota arriba). */
+    .fotos-badge { position: absolute; top: var(--space-2); right: var(--space-2);
+                   background: rgba(9, 9, 45, .65); color: #fff; border-radius: var(--radius);
+                   padding: .2rem .55rem; font-size: .85rem; line-height: 1.4;
+                   pointer-events: none; }
+    .galeria { display: flex; flex-direction: column; gap: var(--space-2); }
+    .galeria-marco { position: relative; }
+    dialog#ficha .galeria-principal { width: 100%; aspect-ratio: 3/2; object-fit: cover;
+                                      border-radius: var(--radius); background: var(--bg); display: block; }
+    .galeria-flecha { position: absolute; top: 50%; transform: translateY(-50%);
+                      min-width: 44px; min-height: 44px; border: 0; border-radius: var(--radius);
+                      background: rgba(9, 9, 45, .55); color: #fff; font-size: 1.6rem; line-height: 1;
+                      cursor: pointer; transition: background .15s ease; }
+    .galeria-flecha:hover { background: rgba(9, 9, 45, .78); }
+    .galeria-flecha:active { transform: translateY(calc(-50% + 1px)); }
+    .galeria-flecha:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+    .galeria-flecha.anterior { left: var(--space-2); }
+    .galeria-flecha.siguiente { right: var(--space-2); }
+    .galeria-tira { display: flex; gap: var(--space-2); overflow-x: auto;
+                    padding-bottom: 4px; scroll-snap-type: x proximity; }
+    .galeria-mini { flex: 0 0 auto; width: 72px; height: 54px; min-height: 44px; padding: 0;
+                    border: 2px solid transparent; border-radius: var(--radius); overflow: hidden;
+                    background: var(--bg); cursor: pointer; scroll-snap-align: start;
+                    transition: border-color .15s ease; }
+    .galeria-mini.activa { border-color: var(--primary); }
+    .galeria-mini:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+    dialog#ficha .galeria-mini img { width: 100%; height: 100%; object-fit: cover;
+                                     border-radius: 0; display: block; }
     @media (max-width: 719px) {
       dialog#ficha { width: calc(100vw - var(--space-4) * 2); padding: var(--space-4);
                      max-height: calc(100dvh - var(--space-6)); }
