@@ -60,6 +60,18 @@ datos, el seed y la documentación; el CRM vive en
 
 ## Deuda consciente / siguiente iteración
 
+- **Aperturas de email pendientes de un ajuste en Brevo** (2026-07-30):
+  entrega verificada de punta a punta (webhook transaccional → evento
+  `delivered` → estado "entregado" en la actividad), pero no llegan los
+  eventos `opened`/`click`. Descartado en nuestro lado: endpoint válido
+  desde fuera, todos los eventos marcados en el webhook, correos enviados en
+  multipart texto+HTML (verificado en el contenedor), imágenes cargadas por
+  el cliente de correo. Queda por revisar el seguimiento de aperturas/clics
+  a nivel de cuenta del relay (Configuración → SMTP y API), o resolverlo con
+  una API key de Brevo leyendo su propio log de eventos. El código ya está
+  listo: en cuanto Brevo emita el evento, el historial lo refleja sin tocar
+  nada. Trazabilidad: cada llamada entrante queda en events como
+  `email.event_received`.
 - Motor de seguimiento (recordatorios 48 h, matching, resumen diario): cron
   del chasis pendiente de diseño — hoy el aviso es instantáneo por Telegram.
 - Import: CSV (el Excel se guarda como CSV); parser xlsx nativo si molesta.
