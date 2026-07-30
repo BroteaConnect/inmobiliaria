@@ -184,6 +184,13 @@
           "type": "date"
         },
         {
+          "name": "prioridad",
+          "type": "number",
+          "min": 1,
+          "max": 5,
+          "onlyInt": true
+        },
+        {
           "name": "created",
           "type": "autodate",
           "onCreate": true,
