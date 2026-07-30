@@ -4,15 +4,16 @@ import Layout from '../layouts/Layout.astro';
 
 <Layout title="Inmobiliaria — propiedades en venta">
   <section class="hero">
-    <h1>Encuentra tu próxima casa</h1>
+    <h1>Casas que hemos pisado.</h1>
     <p class="lede">
-      Gestión personal y cercana: cada propiedad la conocemos de primera mano.
-      Déjanos tus datos en la que te interese y te llamamos hoy.
+      Vendemos pocas propiedades a la vez, y todas las hemos visitado.
+      Cuéntanos cuál te encaja y te llamamos hoy mismo.
     </p>
+    <div class="hero-filete" aria-hidden="true"></div>
   </section>
 
   <div id="catalogo" class="catalogo" aria-live="polite">
-    <p class="cargando">Cargando propiedades…</p>
+    <p class="cargando">Abriendo el cuaderno de visitas…</p>
   </div>
 
   <!-- Ficha + formulario de interés (se rellena al elegir propiedad) -->
@@ -20,7 +21,7 @@ import Layout from '../layouts/Layout.astro';
     <button class="cerrar" id="cerrar-ficha" aria-label="Cerrar">×</button>
     <div id="ficha-contenido"></div>
     <form id="interes">
-      <h3>Me interesa esta propiedad</h3>
+      <h3>Quiero verla por dentro</h3>
       <input type="hidden" name="propiedad" />
       <label>Nombre <input name="nombre" required autocomplete="name" /></label>
       <label>Teléfono <input name="telefono" required autocomplete="tel" /></label>
@@ -53,22 +54,36 @@ import Layout from '../layouts/Layout.astro';
     const status = document.getElementById('interes-status')!;
     let props: Propiedad[] = [];
 
+    // El apunte de visita: primera frase de la descripción existente
+    // (elemento firma — cero cambios de esquema).
+    const apunteDe = (p: Propiedad) => {
+      const a = (p.descripcion ?? '').split(/\.\s/)[0].trim().slice(0, 140);
+      return a ? (/[.!?…]$/.test(a) ? a : `${a}.`) : '';
+    };
+    // Placeholder sin foto: silueta de casa en SVG (sin emojis).
+    const casaSvg = '<svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>';
+
     function render() {
       if (!props.length) {
-        cat.innerHTML = '<p class="cargando">Pronto publicaremos nuevas propiedades. Vuelve en unos días.</p>';
+        cat.innerHTML = '<p class="cargando">Ahora mismo no hay fichas publicadas. Estamos visitando casas nuevas — vuelve en unos días.</p>';
         return;
       }
-      cat.innerHTML = props.map((p) => `
+      cat.innerHTML = props.map((p) => {
+        const apunte = apunteDe(p);
+        return `
         <article class="card" data-id="${p.id}">
-          ${foto(p) ? `<img src="${foto(p)}" alt="${p.titulo}" loading="lazy" />` : '<div class="sinfoto">📷</div>'}
-          ${(p.fotos?.length ?? 0) > 1 ? `<span class="fotos-badge" role="img" aria-label="${p.fotos.length} fotos">📷 ${p.fotos.length}</span>` : ''}
+          ${foto(p) ? `<img src="${foto(p)}" alt="${p.titulo}" loading="lazy" />` : `<div class="sinfoto">${casaSvg}</div>`}
+          ${(p.fotos?.length ?? 0) > 1 ? `<span class="fotos-badge data">${p.fotos.length} fotos</span>` : ''}
           <div class="card-body">
+            ${p.municipio ? `<p class="eyebrow">${p.municipio}</p>` : ''}
             <h2>${p.titulo}</h2>
-            <p class="meta">${p.municipio ?? ''} · ${p.habitaciones ?? '–'} hab · ${p.superficie ?? '–'} m²</p>
-            <p class="precio">${eur(p.precio)}</p>
-            <button class="ver" data-id="${p.id}">Ver ficha</button>
+            ${apunte ? `<p class="apunte">${apunte}</p>` : ''}
+            <p class="meta data">${p.habitaciones ?? '–'} hab · ${p.banos ?? '–'} baños · ${p.superficie ?? '–'} m²</p>
+            <p class="precio data">${eur(p.precio)}</p>
+            <button class="ver" data-id="${p.id}">Cómo es por dentro</button>
           </div>
-        </article>`).join('');
+        </article>`;
+      }).join('');
       cat.querySelectorAll<HTMLButtonElement>('.ver').forEach((b) =>
         b.addEventListener('click', () => abrir(b.dataset.id!)));
     }
@@ -141,11 +156,17 @@ import Layout from '../layouts/Layout.astro';
 
     function abrir(id: string) {
       const p = props.find((x) => x.id === id)!;
+      const apunte = apunteDe(p);
+      const desc = (p.descripcion ?? '').trim();
+      // Si la descripción es una sola frase, el apunte ya la muestra entera.
+      const descDuplicada = !!apunte && (desc === apunte || `${desc}.` === apunte);
       fichaBody.innerHTML = `
+        ${p.municipio ? `<p class="eyebrow">${p.municipio}</p>` : ''}
         <h2>${p.titulo}</h2>
-        <p class="meta">${p.municipio ?? ''} · ${p.habitaciones ?? '–'} hab · ${p.banos ?? '–'} baños · ${p.superficie ?? '–'} m²</p>
-        <p class="precio">${eur(p.precio)}</p>
-        <p>${p.descripcion ?? ''}</p>`;
+        ${apunte ? `<p class="apunte">${apunte}</p>` : ''}
+        <p class="meta data">${p.habitaciones ?? '–'} hab · ${p.banos ?? '–'} baños · ${p.superficie ?? '–'} m²</p>
+        <p class="precio data">${eur(p.precio)}</p>
+        ${descDuplicada ? '' : `<p>${desc}</p>`}`;
       const gal = galeria(p);
       if (gal) fichaBody.prepend(gal);
       (form.elements.namedItem('propiedad') as HTMLInputElement).value = p.id;
@@ -185,31 +206,42 @@ import Layout from '../layouts/Layout.astro';
     if (pbUrl()) {
       list<Propiedad>('propiedades', { filter: 'estado="publicada"', sort: '-created', perPage: '50' })
         .then((r) => { props = r.items; render(); })
-        .catch(() => { cat.innerHTML = '<p class="cargando">No se pudo cargar el catálogo.</p>'; });
+        .catch(() => { cat.innerHTML = '<p class="cargando">No hemos podido abrir el catálogo. Recarga la página o llámanos.</p>'; });
     }
   </script>
 
   <!-- El catálogo se genera desde JS: estilos globales a propósito
        (los estilos scoped de Astro no alcanzan nodos creados en runtime). -->
   <style is:global>
-    .hero h1 { font-size: clamp(1.8rem, 6vw, 2.4rem); margin: 0 0 .5rem; }
-    .hero .lede { color: var(--muted); font-size: 1.1rem; max-width: 52ch; }
+    .hero h1 { font-size: var(--text-display-xl); font-weight: 800; letter-spacing: -0.02em;
+               line-height: 1.05; margin: 0 0 var(--space-3); }
+    .hero .lede { color: var(--muted); font-size: var(--text-body-lg); line-height: 1.55;
+                  max-width: 52ch; margin: 0; }
+    /* Filete Latón: eco del apunte de visita bajo el lede (firma, solo aquí). */
+    .hero-filete { position: relative; width: min(220px, 55%); height: 2px;
+                   background: var(--accent); margin: var(--space-5) 0 0; }
+    .hero-filete::after { content: ''; position: absolute; right: -10px; top: -2px;
+                          width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
     .catalogo { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
                 gap: var(--space-5); margin-top: var(--space-6); }
-    .cargando { color: var(--muted); }
+    .cargando { color: var(--muted); max-width: 52ch; }
     .card { position: relative; background: var(--surface); border: 1px solid var(--border);
             border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden;
             display: flex; flex-direction: column;
             transition: transform .18s ease, box-shadow .18s ease; }
     .card:hover { transform: translateY(-3px);
-                  box-shadow: var(--shadow), 0 12px 28px rgba(9, 9, 45, .10); }
+                  box-shadow: var(--shadow), 0 12px 28px rgba(20, 52, 51, .12); }
     .card img { width: 100%; aspect-ratio: 3/2; object-fit: cover; display: block; }
-    .sinfoto { aspect-ratio: 3/2; display: grid; place-items: center; font-size: 2rem;
+    .sinfoto { aspect-ratio: 3/2; display: grid; place-items: center;
                background: var(--bg); color: var(--muted); }
     .card-body { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
-    .card h2 { font-size: 1.1rem; margin: 0; }
-    .meta { color: var(--muted); font-size: .9rem; margin: 0; }
-    .precio { font-family: var(--font-display); font-size: 1.3rem; margin: 0; color: var(--primary); }
+    .card h2 { font-size: var(--text-title); font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+    .card .apunte { margin: var(--space-1) 0; }
+    .meta { color: var(--muted); font-size: var(--text-data); font-weight: 500;
+            letter-spacing: .01em; margin: 0; }
+    /* Latón solo en datos: el precio es numeral, nunca fondo ni botón. */
+    .precio { font-family: var(--font-sans); font-weight: 700; font-size: var(--text-data-lg);
+              margin: 0; color: var(--accent); }
     .ver { align-self: start; background: var(--primary); color: var(--primary-contrast);
            border: 0; border-radius: var(--radius); padding: .5rem 1.2rem; font: inherit;
            font-weight: 600; cursor: pointer; min-height: 44px;
@@ -220,14 +252,19 @@ import Layout from '../layouts/Layout.astro';
     dialog#ficha { border: 1px solid var(--border); border-radius: var(--radius-lg);
                    background: var(--surface); color: var(--text); max-width: 640px; width: 92vw;
                    padding: var(--space-5); max-height: min(85dvh, 720px); overflow-y: auto; }
-    dialog#ficha::backdrop { background: rgba(9, 9, 45, .55); }
+    dialog#ficha::backdrop { background: rgba(20, 52, 51, .55); }
+    dialog#ficha h2 { font-size: var(--text-display-lg); font-weight: 700;
+                      letter-spacing: -0.015em; line-height: 1.15; margin: var(--space-2) 0; }
+    dialog#ficha .apunte { margin: var(--space-2) 0 var(--space-3); }
     dialog#ficha img { width: 100%; border-radius: var(--radius); }
     dialog#ficha .cerrar { float: right; background: none; border: 0; font-size: 1.6rem;
                            cursor: pointer; color: var(--muted); min-width: 44px; min-height: 44px;
                            border-radius: var(--radius); transition: color .15s ease, background .15s ease; }
     dialog#ficha .cerrar:hover { color: var(--text); background: color-mix(in srgb, var(--muted) 12%, transparent); }
     dialog#ficha .cerrar:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-    #interes { margin-top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); }
+    #interes { margin-top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-3);
+               border-top: 1px solid var(--border); padding-top: var(--space-4); }
+    #interes h3 { font-size: var(--text-title); font-weight: 600; letter-spacing: -0.01em; margin: 0; }
     #interes label { font-weight: 600; font-size: .9rem; display: flex; flex-direction: column; gap: 4px; }
     #interes input, #interes textarea { padding: .55rem .7rem; border: 1px solid var(--border);
       border-radius: var(--radius); font: inherit; background: var(--bg); color: var(--text);
@@ -244,18 +281,18 @@ import Layout from '../layouts/Layout.astro';
     #interes-status { color: var(--ok); min-height: 1.2em; margin: 0; }
     /* Galería de la ficha: nodos creados en runtime → estilos globales (ver nota arriba). */
     .fotos-badge { position: absolute; top: var(--space-2); right: var(--space-2);
-                   background: rgba(9, 9, 45, .65); color: #fff; border-radius: var(--radius);
-                   padding: .2rem .55rem; font-size: .85rem; line-height: 1.4;
-                   pointer-events: none; }
+                   background: rgba(20, 52, 51, .72); color: #FBF9F4; border-radius: var(--radius);
+                   padding: .2rem .55rem; font-size: .8rem; font-weight: 500;
+                   letter-spacing: .01em; line-height: 1.4; pointer-events: none; }
     .galeria { display: flex; flex-direction: column; gap: var(--space-2); }
     .galeria-marco { position: relative; }
     dialog#ficha .galeria-principal { width: 100%; aspect-ratio: 3/2; object-fit: cover;
                                       border-radius: var(--radius); background: var(--bg); display: block; }
     .galeria-flecha { position: absolute; top: 50%; transform: translateY(-50%);
                       min-width: 44px; min-height: 44px; border: 0; border-radius: var(--radius);
-                      background: rgba(9, 9, 45, .55); color: #fff; font-size: 1.6rem; line-height: 1;
+                      background: rgba(20, 52, 51, .55); color: #FBF9F4; font-size: 1.6rem; line-height: 1;
                       cursor: pointer; transition: background .15s ease; }
-    .galeria-flecha:hover { background: rgba(9, 9, 45, .78); }
+    .galeria-flecha:hover { background: rgba(20, 52, 51, .78); }
     .galeria-flecha:active { transform: translateY(calc(-50% + 1px)); }
     .galeria-flecha:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
     .galeria-flecha.anterior { left: var(--space-2); }

@@ -1,16 +1,24 @@
 ---
 import '../styles/theme.css';
 import '../styles/base.css';
+import '@fontsource-variable/bricolage-grotesque';
+import '@fontsource-variable/archivo';
+import '@fontsource-variable/archivo/wght-italic.css';
+import '../styles/identity.css';
 import Nav from '../components/Nav.astro';
 const { title = '__PROJECT_NAME__' } = Astro.props;
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{title}</title>
+    <meta
+      name="description"
+      content="Vendemos pocas propiedades a la vez, y todas las hemos visitado. Cuéntanos cuál te encaja y te llamamos hoy mismo."
+    />
     <!-- brotea:head -->
     <meta name="pb-url" content={import.meta.env.PUBLIC_PB_URL} />
     <script is:inline defer id="brotea-errors" src="/brotea-errors.js" data-dsn={import.meta.env.PUBLIC_GLITCHTIP_DSN}></script>

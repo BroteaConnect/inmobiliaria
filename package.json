@@ -10,8 +10,10 @@
     "test": "astro build"
   },
   "dependencies": {
-    "astro": "^5.0.0",
     "@astrojs/react": "^4.0.0",
+    "@fontsource-variable/archivo": "^5.3.0",
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "astro": "^5.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
