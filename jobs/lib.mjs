@@ -19,19 +19,39 @@ export const MAX_NOMBRE = 80; // nombre comes from a public form — an unbounde
 // Same exclusions as the CRM's desatendido() (inmobiliaria-crm api.ts):
 // 'nutriendo' is deliberately parked, 'vendido' needs no chasing.
 export const ETAPAS_EXCLUIDAS = ['nutriendo', 'vendido'];
+// The CSV importer stamps this origen (inmobiliaria-crm Importar.tsx:129).
+// A 216-row import is not 216 new leads: the digest must not claim it was.
+export const ORIGEN_IMPORTADO = 'histórico';
 
 // PocketBase serializes dates as "YYYY-MM-DD HH:MM:SS.sssZ" (space, not T).
 export const parseFecha = (s) => (s instanceof Date ? s : new Date(String(s).replace(' ', 'T')));
 
+// Records written BEFORE the autodate fields were declared in pb/schema.json
+// keep created/updated = "" forever (autodate only stamps on write). Real data
+// has them — 4 leads, 2 actividades, 14 propiedades on 2026-07-30 — so every
+// date here must survive being unparseable instead of throwing.
+export const esFecha = (d) => d instanceof Date && Number.isFinite(d.getTime());
+
 // The staleness clock: a brand-new lead nobody ever touched has no
 // ultimo_contacto at all — falling back to created is what makes it appear.
+// May be an Invalid Date when the record predates the autodate fields.
 export const relojLead = (lead) => parseFecha(lead.ultimo_contacto || lead.created);
 
-// YYYY-MM-DD of the Europe/Madrid local day for a given instant.
+// A lead with no usable timestamp is the *most* abandoned case, not one to
+// skip: sorting it as infinitely old puts it at the top of the agenda.
+const esperaDesde = (lead) => {
+  const d = relojLead(lead);
+  return esFecha(d) ? d.getTime() : -Infinity;
+};
+
+// YYYY-MM-DD of the Europe/Madrid local day, or null when the date is unusable.
 const madridDay = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit',
 });
-export const diaMadrid = (date) => madridDay.format(parseFecha(date));
+export const diaMadrid = (date) => {
+  const d = parseFecha(date);
+  return esFecha(d) ? madridDay.format(d) : null;
+};
 
 const madridHeader = new Intl.DateTimeFormat('es-ES', {
   timeZone: 'Europe/Madrid', weekday: 'long', day: 'numeric', month: 'long',
@@ -42,7 +62,9 @@ const escapeHtml = (s) =>
 
 // "hace 3 días" / "hace 1 día" / "hace 5 horas" / "hace menos de una hora"
 export function haceCuanto(date, now) {
-  const ms = now - parseFecha(date);
+  const d = parseFecha(date);
+  if (!esFecha(d)) return 'sin fecha registrada';
+  const ms = now - d;
   const days = Math.floor(ms / MS_DAY);
   if (days >= 1) return `hace ${days} ${days === 1 ? 'día' : 'días'}`;
   const hours = Math.floor(ms / MS_HOUR);
@@ -55,8 +77,10 @@ export function haceCuanto(date, now) {
 export function desatendidos(leads, now) {
   return leads
     .filter((l) => !ETAPAS_EXCLUIDAS.includes(l.etapa))
-    .filter((l) => now - relojLead(l) > STALE_HOURS * MS_HOUR)
-    .sort((a, b) => relojLead(a) - relojLead(b));
+    // esperaDesde() is -Infinity for a lead with no usable date, so it passes
+    // the threshold instead of silently vanishing on a NaN comparison.
+    .filter((l) => now - esperaDesde(l) > STALE_HOURS * MS_HOUR)
+    .sort((a, b) => esperaDesde(a) - esperaDesde(b));
 }
 
 // The 09:00 agenda message (HTML). Returns null when there is nothing to
@@ -65,7 +89,8 @@ export function textoAgenda(stale, now) {
   if (!stale.length) return null;
   const lines = stale.slice(0, MAX_LINES).map((l) => {
     const since = relojLead(l);
-    const warn = now - since > ALERT_DAYS * MS_DAY ? '⚠️ ' : '';
+    // unknown wait = worst case, so it gets the warning too
+    const warn = !esFecha(since) || now - since > ALERT_DAYS * MS_DAY ? '⚠️ ' : '';
     const nombre = escapeHtml(String(l.nombre).slice(0, MAX_NOMBRE));
     return `• ${warn}<b>${nombre}</b> — ${escapeHtml(l.etapa || 'sin etapa')} · ${haceCuanto(since, now)}`;
   });
@@ -90,9 +115,13 @@ export function textoAgenda(stale, now) {
 //   available proxy: there is no state-change log)
 export function resumenDelDia({ leads = [], actividades = [], propiedades = [] }, now) {
   const hoy = diaMadrid(now);
+  // diaMadrid() is null for records with an empty autodate: "unknown" is not
+  // "today", and it must never crash the whole digest.
   const deHoy = (r) => diaMadrid(r.created) === hoy;
 
-  const nuevos = leads.filter(deHoy).length;
+  const leadsHoy = leads.filter(deHoy);
+  const nuevos = leadsHoy.filter((l) => l.origen !== ORIGEN_IMPORTADO).length;
+  const importados = leadsHoy.length - nuevos;
 
   const actsHoy = actividades.filter(deHoy);
   const contactos = Object.create(null); // a.tipo as key — keep __proto__ inert
@@ -110,8 +139,8 @@ export function resumenDelDia({ leads = [], actividades = [], propiedades = [] }
   ).length;
 
   const totalContactos = Object.values(contactos).reduce((s, n) => s + n, 0);
-  const vacio = nuevos + totalContactos + entrantes + emailsEntregados + publicadas === 0;
-  return { dia: hoy, nuevos, contactos, entrantes, emailsEntregados, publicadas, vacio };
+  const vacio = nuevos + importados + totalContactos + entrantes + emailsEntregados + publicadas === 0;
+  return { dia: hoy, nuevos, importados, contactos, entrantes, emailsEntregados, publicadas, vacio };
 }
 
 // The 20:00 digest (HTML). Returns null when the day was empty.
@@ -119,6 +148,7 @@ export function textoResumen(resumen, now) {
   if (!resumen || resumen.vacio) return null;
   const lines = [];
   if (resumen.nuevos) lines.push(`• Leads nuevos: <b>${resumen.nuevos}</b>`);
+  if (resumen.importados) lines.push(`• Importados a la cartera: ${resumen.importados}`);
   const canales = Object.entries(resumen.contactos)
     .map(([tipo, n]) => `${n} ${escapeHtml(tipo)}`)
     .join(', ');

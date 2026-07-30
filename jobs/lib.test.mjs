@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   desatendidos, textoAgenda, resumenDelDia, textoResumen, haceCuanto,
-  diaMadrid, MAX_LINES, MAX_NOMBRE,
+  diaMadrid, MAX_LINES, MAX_NOMBRE, ORIGEN_IMPORTADO,
 } from './lib.mjs';
 
 // Fixed "now": 2026-07-30 09:00 Europe/Madrid (CEST, UTC+2) = 07:00Z.
@@ -132,6 +132,7 @@ describe('diaMadrid / resumenDelDia', () => {
       ],
     }, NOW);
     assert.equal(r.nuevos, 1);
+    assert.equal(r.importados, 0);
     // spread: contactos is a null-prototype object, deepEqual is strict
     assert.deepEqual({ ...r.contactos }, { llamada: 2, whatsapp: 1, email: 2 });
     assert.equal(r.entrantes, 1);
@@ -143,6 +144,73 @@ describe('diaMadrid / resumenDelDia', () => {
   it('flags an empty day', () => {
     const r = resumenDelDia({ leads: [], actividades: [], propiedades: [] }, NOW);
     assert.equal(r.vacio, true);
+  });
+});
+
+// Regression: records written before pb/schema.json declared the autodate
+// fields keep created/updated = "" for ever. Real data had them (4 leads,
+// 2 actividades, 14 propiedades on 2026-07-30) and they used to make the
+// digest throw "Invalid time value" and the agenda drop the lead silently.
+describe('fechas vacías (registros previos a los autodate)', () => {
+  it('treats an unparseable date as unknown, not as a crash', () => {
+    assert.equal(diaMadrid(''), null);
+    assert.equal(haceCuanto('', NOW), 'sin fecha registrada');
+  });
+
+  it('puts a lead with no usable date first in the agenda, never hides it', () => {
+    const sinFecha = lead({ nombre: 'Jorge y Ana', created: '', ultimo_contacto: '' });
+    const viejo = lead({ nombre: 'Otro', ultimo_contacto: hoursAgo(100) });
+    const out = desatendidos([viejo, sinFecha], NOW);
+    assert.deepEqual(out.map((l) => l.nombre), ['Jorge y Ana', 'Otro']);
+  });
+
+  it('marks it urgent and says so instead of inventing a wait', () => {
+    const sinFecha = lead({ nombre: 'Isabel', created: '', ultimo_contacto: '' });
+    const txt = textoAgenda(desatendidos([sinFecha], NOW), NOW);
+    assert.match(txt, /⚠️ <b>Isabel<\/b> — nuevo · sin fecha registrada/);
+  });
+
+  it('counts dateless records as "not today" and still builds the digest', () => {
+    const r = resumenDelDia({
+      leads: [lead({ created: '' }), lead({ created: hoursAgo(2) })],
+      actividades: [{ tipo: 'llamada', direccion: 'saliente', created: '' }],
+      propiedades: [{ estado: 'publicada', updated: '', created: '' }],
+    }, NOW);
+    assert.equal(r.nuevos, 1);
+    assert.deepEqual({ ...r.contactos }, {});
+    assert.equal(r.publicadas, 0);
+    assert.match(textoResumen(r, NOW), /Leads nuevos: <b>1<\/b>/);
+  });
+});
+
+// A CSV import is bookkeeping, not lead generation: the day the real Excel
+// landed the digest would have claimed "220 leads nuevos" (216 of them
+// imported rows). The counters keep them apart.
+describe('leads importados', () => {
+  it('separates imported rows from real new leads', () => {
+    const r = resumenDelDia({
+      leads: [
+        lead({ created: hoursAgo(2), origen: 'web' }),
+        lead({ created: hoursAgo(1), origen: ORIGEN_IMPORTADO }),
+        lead({ created: hoursAgo(1), origen: ORIGEN_IMPORTADO }),
+        lead({ created: '2026-07-20 10:00:00.000Z', origen: ORIGEN_IMPORTADO }), // not today
+      ],
+      actividades: [], propiedades: [],
+    }, NOW);
+    assert.equal(r.nuevos, 1);
+    assert.equal(r.importados, 2);
+    const txt = textoResumen(r, NOW);
+    assert.match(txt, /Leads nuevos: <b>1<\/b>/);
+    assert.match(txt, /Importados a la cartera: 2/);
+  });
+
+  it('an import-only day is still worth reporting', () => {
+    const r = resumenDelDia({
+      leads: [lead({ created: hoursAgo(1), origen: ORIGEN_IMPORTADO })],
+      actividades: [], propiedades: [],
+    }, NOW);
+    assert.equal(r.vacio, false);
+    assert.doesNotMatch(textoResumen(r, NOW), /Leads nuevos/);
   });
 });
 
