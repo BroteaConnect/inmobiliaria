@@ -15,6 +15,9 @@ datos, el seed y la documentación; el CRM vive en
 | Modelo de datos | `pb/schema.json` (declarativo, aditivo) | este repo |
 | Seed demo | `pb/seed.mjs` | este repo |
 
+La capa de UI del escaparate (nav responsive, contrato `brotea:nav`,
+convenciones de pulido) está documentada en [docs/frontend-ui.md](frontend-ui.md).
+
 ## Flujos clave
 
 - **Lead entra**: formulario del escaparate → `create('leads')` en PocketBase
