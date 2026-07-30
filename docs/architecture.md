@@ -17,6 +17,8 @@ datos, el seed y la documentación; el CRM vive en
 
 La capa de UI del escaparate (nav responsive, contrato `brotea:nav`,
 convenciones de pulido) está documentada en [docs/frontend-ui.md](frontend-ui.md).
+Los jobs programados (agenda 09:00 + resumen 20:00 por Telegram) en
+[docs/jobs.md](jobs.md).
 
 ## Flujos clave
 
@@ -41,6 +43,7 @@ convenciones de pulido) está documentada en [docs/frontend-ui.md](frontend-ui.m
 
 - Modelo de datos → skill `pb-schema` (editar `pb/schema.json` y aplicar).
 - Datos de demo → skill `demo-data`.
+- Jobs programados → skill `jobs` (añadir/modificar `jobs/*.mjs`).
 - Código → PR normal de la fábrica: CI verde → auto-merge → deploy.
 - El tema visual es `brotea@2.0.0` (lockfile `brotea.json`); para la marca de
   la clienta: crear su tema en el catálogo de la fábrica y `brotea theme`.
@@ -78,8 +81,10 @@ convenciones de pulido) está documentada en [docs/frontend-ui.md](frontend-ui.m
   `email.event_received` de la tabla events. **Consecuencia de producto:**
   la UI solo afirma lo que ocurrió (entregado / abierto ✓); nunca interpretar
   la ausencia de "abierto" como "no lo ha leído".
-- Motor de seguimiento (recordatorios 48 h, matching, resumen diario): cron
-  del chasis pendiente de diseño — hoy el aviso es instantáneo por Telegram.
+- Motor de seguimiento (cerrado 2026-07-30): agenda de leads desatendidos a
+  las 09:00 y resumen del día a las 20:00 por Telegram — ver
+  [docs/jobs.md](jobs.md). Queda el matching lead↔propiedad para una fase
+  posterior.
 - Import: CSV (el Excel se guarda como CSV); parser xlsx nativo si molesta.
 - WhatsApp saliente: enlaces `wa.me` prellenados en el CRM (API de WhatsApp
   Business en fase 2).
