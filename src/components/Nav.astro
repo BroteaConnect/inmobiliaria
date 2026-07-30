@@ -1,27 +1,192 @@
 ---
 // Nav links. Feature installs insert their entry after the anchor below —
-// do not remove the `brotea:nav` marker.
+// do not remove the `brotea:nav` marker (it must stay inside .links).
 ---
 
 <nav>
-  <a href="/">Home</a>
-  <!-- brotea:nav -->
+  <a class="brand" href="/">Inmobiliaria</a>
+  <button
+    class="menu-btn"
+    type="button"
+    aria-expanded="false"
+    aria-controls="nav-links"
+    aria-label="Abrir menú"
+  >
+    <span class="bar"></span>
+    <span class="bar"></span>
+    <span class="bar"></span>
+  </button>
+  <div class="links" id="nav-links">
+    <a href="/">Home</a>
+    <!-- brotea:nav -->
+  </div>
 </nav>
+
+<script>
+  // Toggles only classes/attributes on server-rendered nodes, so Astro's
+  // scoped styles still apply (no DOM is created at runtime here).
+  const nav = document.querySelector('nav')!;
+  const btn = nav.querySelector<HTMLButtonElement>('.menu-btn')!;
+  const links = nav.querySelector<HTMLElement>('.links')!;
+
+  const setOpen = (open: boolean) => {
+    links.classList.toggle('open', open);
+    btn.setAttribute('aria-expanded', String(open));
+    btn.setAttribute('aria-label', open ? 'Cerrar menú' : 'Abrir menú');
+  };
+
+  btn.addEventListener('click', () => setOpen(!links.classList.contains('open')));
+  // Close the drawer when any link (including future injected ones) is chosen.
+  links.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).closest('a')) setOpen(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && links.classList.contains('open')) {
+      setOpen(false);
+      btn.focus();
+    }
+  });
+</script>
 
 <style>
   nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
     display: flex;
+    align-items: center;
     gap: var(--space-4);
-    padding: var(--space-4);
+    padding: var(--space-3) var(--space-4);
     border-bottom: 1px solid var(--border);
     background: var(--surface);
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
   }
-  nav :global(a) {
+
+  .brand {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 1.05rem;
+    letter-spacing: 0.01em;
+    line-height: 1;
+    color: var(--text);
+    text-decoration: none;
+    padding: var(--space-2) 0;
+    transition: color 0.15s ease;
+  }
+  .brand:hover {
+    color: var(--primary);
+  }
+
+  /* Visible links row — feature installs inject bare <a> tags at the
+     brotea:nav marker, so anchors are styled at element level. */
+  nav .links {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+  }
+  nav .links :global(a) {
     color: var(--primary);
     text-decoration: none;
     font-weight: 600;
+    padding: 0.4rem 0.8rem;
+    border-radius: var(--radius);
+    transition: background 0.15s ease, color 0.15s ease;
   }
-  nav :global(a:hover) {
-    text-decoration: underline;
+  nav .links :global(a:hover) {
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+  }
+  nav .links :global(a:focus-visible),
+  .brand:focus-visible,
+  .menu-btn:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+
+  .menu-btn {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .menu-btn:hover {
+    border-color: var(--primary);
+  }
+  .menu-btn .bar {
+    display: block;
+    width: 18px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--text);
+    transition: transform 0.18s ease, opacity 0.18s ease;
+  }
+  .menu-btn[aria-expanded='true'] .bar:nth-child(1) {
+    transform: translateY(7px) rotate(45deg);
+  }
+  .menu-btn[aria-expanded='true'] .bar:nth-child(2) {
+    opacity: 0;
+  }
+  .menu-btn[aria-expanded='true'] .bar:nth-child(3) {
+    transform: translateY(-7px) rotate(-45deg);
+  }
+
+  /* Mobile: hamburger + drawer. The drawer is toggled with the `open`
+     class and explicit display rules — never the [hidden] attribute
+     (it loses to any author display rule). */
+  @media (max-width: 719px) {
+    .menu-btn {
+      display: inline-flex;
+      margin-left: auto;
+    }
+    nav .links {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-1);
+      margin: 0;
+      padding: var(--space-3) var(--space-4) var(--space-4);
+      background: var(--surface);
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      -webkit-backdrop-filter: blur(14px);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+    nav .links.open {
+      display: flex;
+      animation: nav-drop 0.18s ease;
+    }
+    nav .links :global(a) {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
+      padding: 0.6rem 0.9rem;
+    }
+  }
+
+  @keyframes nav-drop {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 </style>
