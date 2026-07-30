@@ -14,17 +14,18 @@ export async function run(ctx) { ... }
 //   log(msg)    stdout · now: Date del arranque · slug: del proyecto
 ```
 
-**Estado actual**: el runner (`scripts/run-jobs.mjs`, ámbito plataforma) aún
-no existe — los jobs están mergeados pero **dormidos** hasta que el chasis lo
-construya. Aquí solo viven las **reglas de producto**; la infraestructura
-(auth, scheduling, cron, fallos) será del chasis y no se copia.
+**Estado actual (2026-07-30)**: en marcha. El runner del chasis
+(`scripts/run-jobs.mjs`, ámbito plataforma) corre con un cron horario, descubre
+estos jobs en el checkout de `main` y decide cuál toca por su `when`. Aquí solo
+viven las **reglas de producto**; la infraestructura (auth, scheduling, cron,
+aislamiento de fallos, reintentos) es del chasis y no se copia.
 
 ## Qué se envía y cuándo (hora de Madrid)
 
 | Job | Hora | Mensaje al topic de Telegram |
 |---|---|---|
 | `jobs/agenda.mjs` | 09:00 | Leads con más de **48 h** sin contacto, el más abandonado primero. `⚠️` a partir de 5 días. Máximo 10 líneas + "… y N más". |
-| `jobs/resumen.mjs` | 20:00 | Resumen del día: leads nuevos, contactos salientes por canal, mensajes entrantes, emails entregados y propiedades publicadas. |
+| `jobs/resumen.mjs` | 20:00 | Resumen del día: leads nuevos, importados a la cartera, contactos salientes por canal, mensajes entrantes, emails entregados y propiedades publicadas. |
 
 **El silencio es una feature**: si no hay leads desatendidos o el día está
 vacío, no se envía nada. Un canal que solo habla cuando hay algo que decir
@@ -41,6 +42,16 @@ no se silencia.
   80 caracteres (`MAX_NOMBRE`: vienen de un formulario público y un nombre
   sin límite podría pasar de los 4096 caracteres de Telegram y matar el
   mensaje). Cambiarlos es editar las constantes de `lib.mjs` en un PR.
+- Fechas vacías: las filas creadas **antes** de declarar los `autodate` en
+  `pb/schema.json` conservan `created`/`updated` a `""` para siempre (el
+  autodate solo sella al escribir). Los datos reales las tienen, así que toda
+  fecha se parsea a la defensiva: un día desconocido no es "hoy" y no rompe el
+  resumen, y un lead sin fecha usable encabeza la agenda con `⚠️` y "sin fecha
+  registrada" — es el caso más abandonado, no uno que ocultar.
+- Un **import no es generación de leads**: las filas con `origen: 'histórico'`
+  (las que mete el importador CSV del CRM) se cuentan aparte, en "importados a
+  la cartera". Si no, el día que entró el Excel real el resumen habría cantado
+  "220 leads nuevos" cuando fueron 4.
 - Contadores del resumen: las `nota` no cuentan como contacto saliente;
   «emails entregados» son actividades email con `estado_envio` en
   entregado/abierto/click; «propiedades publicadas» son las que están en
@@ -54,9 +65,11 @@ no se silencia.
 
 - Tests unitarios: `npm test` (ejecuta `node --test jobs/*.test.mjs` y
   después el build de Astro; CI corre exactamente eso).
-- Dry-run contra datos reales, sin enviar nada (desde la raíz de la
-  fábrica, cuando exista el runner):
+- Dry-run contra datos reales, sin enviar nada (desde la raíz de la fábrica):
   `node scripts/run-jobs.mjs --slug inmobiliaria --dry-run --force`
+  Añade `--jobs-dir <ruta>/jobs` para probar el código de un worktree **antes**
+  de mergearlo (en producción el runner solo lee `main`).
+- Qué toca ahora y por qué: `node scripts/run-jobs.mjs --list`.
 - Los jobs son stateless y re-ejecutables: no escriben en PocketBase. Cada
   envío inserta su evento de plataforma — `lead.reminder_sent`
   (`{count, oldest}`) la agenda, `project.daily_digest` (los contadores) el
