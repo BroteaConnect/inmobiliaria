@@ -81,10 +81,11 @@ Los jobs programados (agenda 09:00 + resumen 20:00 por Telegram) en
   `email.event_received` de la tabla events. **Consecuencia de producto:**
   la UI solo afirma lo que ocurrió (entregado / abierto ✓); nunca interpretar
   la ausencia de "abierto" como "no lo ha leído".
-- Motor de seguimiento (cerrado 2026-07-30): agenda de leads desatendidos a
-  las 09:00 y resumen del día a las 20:00 por Telegram — ver
-  [docs/jobs.md](jobs.md). Queda el matching lead↔propiedad para una fase
-  posterior.
+- Motor de seguimiento (jobs mergeados 2026-07-30): agenda de leads
+  desatendidos a las 09:00 y resumen del día a las 20:00 por Telegram — ver
+  [docs/jobs.md](jobs.md). **Dormidos hasta que el chasis construya su
+  runner genérico** (`scripts/run-jobs.mjs`, ámbito plataforma). Queda el
+  matching lead↔propiedad para una fase posterior.
 - Import: CSV (el Excel se guarda como CSV); parser xlsx nativo si molesta.
 - WhatsApp saliente: enlaces `wa.me` prellenados en el CRM (API de WhatsApp
   Business en fase 2).

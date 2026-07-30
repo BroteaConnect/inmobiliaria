@@ -1,11 +1,23 @@
 # Jobs programados — recordatorios y resumen diario
 
-Los `jobs/*.mjs` de este repo son la mitad *proactiva* del seguimiento: el
-chasis de la fábrica (`scripts/run-jobs.mjs`, cron horario en el host) los
-descubre en el checkout de `main`, decide cuál toca según su `when` y les
-inyecta el contexto (PocketBase autenticado, notificador de Telegram,
-eventos de plataforma). Aquí solo viven las **reglas de producto**; la
-infraestructura (auth, scheduling, fallos) es del chasis y no se copia.
+Los `jobs/*.mjs` de este repo son la mitad *proactiva* del seguimiento.
+Cada módulo expone el contrato que el runner genérico del chasis consumirá:
+
+```js
+export const when = { daily: '09:00' }; // hora LOCAL de Madrid, HH:MM
+
+export async function run(ctx) { ... }
+// ctx = { pb, notify, event, log, now, slug }
+//   pb          cliente PocketBase ya autenticado
+//   notify(txt) mensaje HTML al topic de Telegram del proyecto (en español)
+//   event(t, p) fila en la tabla events de la plataforma (payload jsonb)
+//   log(msg)    stdout · now: Date del arranque · slug: del proyecto
+```
+
+**Estado actual**: el runner (`scripts/run-jobs.mjs`, ámbito plataforma) aún
+no existe — los jobs están mergeados pero **dormidos** hasta que el chasis lo
+construya. Aquí solo viven las **reglas de producto**; la infraestructura
+(auth, scheduling, cron, fallos) será del chasis y no se copia.
 
 ## Qué se envía y cuándo (hora de Madrid)
 
@@ -24,8 +36,16 @@ no se silencia.
   ha tocado nunca es el caso más urgente y aparece por el fallback.
 - Etapas excluidas: `nutriendo` (aparcado a propósito) y `vendido` (no hay
   nada que perseguir) — las mismas que `desatendido()` en el CRM.
-- Umbrales: 48 h para entrar en la agenda, 5 días para el `⚠️`, 10 líneas
-  de tope. Cambiarlos es editar las constantes de `lib.mjs` en un PR.
+- Umbrales: 48 h para entrar en la agenda (`STALE_HOURS`), 5 días para el
+  `⚠️` (`ALERT_DAYS`), 10 líneas de tope (`MAX_LINES`) y nombres truncados a
+  80 caracteres (`MAX_NOMBRE`: vienen de un formulario público y un nombre
+  sin límite podría pasar de los 4096 caracteres de Telegram y matar el
+  mensaje). Cambiarlos es editar las constantes de `lib.mjs` en un PR.
+- Contadores del resumen: las `nota` no cuentan como contacto saliente;
+  «emails entregados» son actividades email con `estado_envio` en
+  entregado/abierto/click; «propiedades publicadas» son las que están en
+  estado `publicada` y se tocaron hoy (`updated`) — un proxy: no existe log
+  de cambios de estado.
 - El "día" es siempre el día local de **Europe/Madrid**, calculado con
   `Intl.DateTimeFormat` — nunca sumando offsets fijos (el DST desplazaría
   la agenda una hora dos veces al año).
@@ -37,9 +57,11 @@ no se silencia.
 - Dry-run contra datos reales, sin enviar nada (desde la raíz de la
   fábrica, cuando exista el runner):
   `node scripts/run-jobs.mjs --slug inmobiliaria --dry-run --force`
-- El estado de ejecución (`job.ran` / `job.failed`) vive en la tabla
-  `events` de la plataforma, no en PocketBase: los jobs son stateless y
-  re-ejecutables.
+- Los jobs son stateless y re-ejecutables: no escriben en PocketBase. Cada
+  envío inserta su evento de plataforma — `lead.reminder_sent`
+  (`{count, oldest}`) la agenda, `project.daily_digest` (los contadores) el
+  resumen — **antes** de `notify()`: si un reintento repite el job, duplica
+  una fila inofensiva, no un mensaje de Telegram.
 
 Para añadir o modificar un job, usa la skill `jobs`
 (`.claude/skills/jobs/SKILL.md`), que documenta el contrato del módulo.
