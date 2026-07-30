@@ -80,6 +80,63 @@ Merged polish (feature 44):
 - `#interes` inputs/textarea: `min-height: 44px`, `:focus-visible` outline
   and a border-color transition.
 
+## Property photo gallery (feature 46)
+
+Before this feature only `fotos[0]` was ever rendered, so photos appended
+in the CRM (`fotos+` lands at the end of the array) never showed up on the
+landing. Fixed purely at the rendering layer — the catalog already fetches
+PocketBase client-side on every visit, so new photos appear on the next
+page load with **no rebuild**.
+
+### Catalog cards: photo-count badge
+
+Cards with more than one photo get a `.fotos-badge` overlay (top-right,
+`pointer-events: none`, `role="img"` + `aria-label`) so visitors know a
+gallery exists:
+
+```js
+${(p.fotos?.length ?? 0) > 1
+  ? `<span class="fotos-badge" role="img" aria-label="${p.fotos.length} fotos">📷 ${p.fotos.length}</span>`
+  : ''}
+```
+
+The badge is absolutely positioned, so `.card` is now `position: relative`.
+
+### Detail dialog: full gallery
+
+`abrir()` no longer injects a single `<img>`; it prepends the element
+returned by `galeria(p)` (a `.galeria` flex column) into `#ficha-contenido`.
+With zero photos `galeria()` returns `null` and nothing is prepended.
+Structure:
+
+- `.galeria-marco` — large main image (`.galeria-principal`, **original**
+  file URL, `aspect-ratio: 3/2`, `object-fit: cover`) with an `aria-live=
+  "polite"` wrapper so the alt text ("foto N de M") is announced on change.
+- `.galeria-tira` — horizontally scrollable thumbnail strip
+  (`overflow-x: auto`, `scroll-snap-type: x proximity`). Each thumb is a
+  `<button class="galeria-mini">` wrapping an `<img>` loaded via
+  `?thumb=600x400` with `loading="lazy"` — never put originals (up to 5 MB
+  each) in the strip. Each button carries `aria-label="Ver foto N de M"`
+  (the inner `<img>` has an empty `alt`). The active thumb gets `.activa` +
+  `aria-current` and is kept in view with `scrollIntoView`.
+- `.galeria-flecha.anterior` / `.siguiente` — prev/next buttons (44px
+  targets, wrap-around navigation via `(i + total) % total`).
+
+With a single photo only the main image is rendered (no strip, no arrows).
+
+Maintainer notes — keep these invariants:
+
+- **Built with plain DOM (`createElement`), no `innerHTML`.** `titulo` is
+  agent input; the DOM API keeps it as text and the XSS surface unchanged.
+  Do not rewrite the gallery as a template string.
+- **Styles live in the `<style is:global>` block** (see the section above:
+  scoped styles never match runtime-created nodes). Two rules are
+  intentionally scoped under `dialog#ficha` (`.galeria-principal`,
+  `.galeria-mini img`) to win over the generic dialog `img` styling.
+- Thumb URLs are stable per filename and PocketBase renames files on
+  upload, so replaced photos get new URLs — do not add cache-busting
+  params.
+
 ## Polish conventions (apply to any new landing UI)
 
 - **44px minimum touch targets** for anything tappable (links in the
