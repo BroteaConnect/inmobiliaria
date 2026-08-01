@@ -9,7 +9,7 @@ datos, el seed y la documentación; el CRM vive en
 
 | Pieza | Qué es | Dónde |
 |---|---|---|
-| Escaparate | Catálogo público + captura de leads (astro, este repo) | https://inmobiliaria.brotea.dev |
+| Escaparate | Catálogo público bilingüe (es en `/`, en en `/en/`) + captura de leads (astro, este repo) | https://inmobiliaria.brotea.dev |
 | CRM | Panel privado: kanban de leads, propiedades, import CSV (react) | https://crm-inmobiliaria.brotea.dev |
 | Backend | PocketBase compartido (datos, fotos, auth, realtime) | https://pb-inmobiliaria.brotea.dev |
 | Modelo de datos | `pb/schema.json` (declarativo, aditivo) | este repo |
@@ -17,8 +17,11 @@ datos, el seed y la documentación; el CRM vive en
 
 La capa de UI del escaparate (nav responsive, contrato `brotea:nav`,
 convenciones de pulido) está documentada en [docs/frontend-ui.md](frontend-ui.md).
-Los jobs programados (agenda 09:00 + resumen 20:00 por Telegram) en
-[docs/jobs.md](jobs.md).
+El escaparate es bilingüe es/en sobre el contrato i18n de la fábrica
+(rutas `[...lang]`, `t()`, `LanguageSwitcher`, gate de CI) — ver
+[docs/i18n.md](i18n.md); los datos de las propiedades (titulo,
+descripcion…) no se traducen. Los jobs programados (agenda 09:00 +
+resumen 20:00 por Telegram) en [docs/jobs.md](jobs.md).
 
 ## Flujos clave
 

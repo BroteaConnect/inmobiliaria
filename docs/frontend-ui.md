@@ -5,20 +5,32 @@ the premium polish conventions. Scope: this repo only — the CRM's responsive
 work is tracked separately in `BroteaConnect/inmobiliaria-crm` and is not
 documented here (different repo).
 
+Since feature 52 the landing is bilingual (es at `/`, en at `/en/`); all
+UI copy comes from `src/locales/{es,en}.json` via `t(locale, key)` and
+every internal href goes through `localePath()`. The full contract is in
+[docs/i18n.md](i18n.md); below only the UI-structure consequences.
+
 ## Nav component (`src/components/Nav.astro`)
 
-One component, two layouts around a single 720px breakpoint:
+The component takes a required `locale` prop (i18n contract: components
+get the locale as a prop, never from context). One component, two layouts
+around a single 720px breakpoint:
 
-- **Desktop (≥720px)**: brand wordmark "Inmobiliaria" on the left
-  (`var(--font-display)`), horizontal row of links on the right. Hover shows
-  a pill background (`color-mix` of `--primary`).
+- **Desktop (≥720px)**: brand wordmark (`t(locale, 'nav.brand')`,
+  `var(--font-display)`) on the left, linking to `localePath(locale, '/')`;
+  horizontal row of links plus the `LanguageSwitcher` on the right. Hover
+  shows a pill background (`color-mix` of `--primary`).
 - **Mobile (<720px)**: the links collapse into a dropdown drawer behind a
   hamburger `<button class="menu-btn">`. The button carries
   `aria-expanded`, `aria-controls="nav-links"` and an `aria-label` that
-  toggles between "Abrir menú" / "Cerrar menú". The bars animate into an X
-  when open (`nav-drop` animation, 0.18s). The drawer closes when any link
-  is clicked (event delegation on the container, so it also covers links
-  injected later) and on `Escape`, which refocuses the button.
+  toggles between the open/close labels. Those labels are rendered
+  server-side into `data-label-open` / `data-label-close` (from
+  `t(locale, 'nav.menuOpen'/'nav.menuClose')`) because the toggle script
+  is **one bundle shared by every locale** — it reads `btn.dataset`, never
+  hardcoded strings. The bars animate into an X when open (`nav-drop`
+  animation, 0.18s). The drawer closes when any link is clicked (event
+  delegation on the container, so it also covers links injected later)
+  and on `Escape`, which refocuses the button.
 
 The header is sticky (`position: sticky; top: 0; z-index: 50`) with a
 translucent `color-mix` background and `backdrop-filter: blur`.
@@ -30,15 +42,19 @@ Feature installs add nav entries by injecting **bare `<a>` tags** at the
 
 ```html
 <div class="links" id="nav-links">
-  <a href="/">Home</a>
+  <a href={localePath(locale, '/')}>{t(locale, 'nav.home')}</a>
   <!-- brotea:nav -->   <!-- installs insert plain <a href="...">…</a> here -->
+  <LanguageSwitcher locale={locale} />
 </div>
 ```
 
 Rules that make this work — keep all three:
 
 - The marker must stay **inside** `.links`; injected anchors land in the
-  same container as the built-in ones.
+  same container as the built-in ones. The `LanguageSwitcher` sits
+  **after** the marker so injected feature links land between `Home` and
+  the switcher; on mobile it inherits the drawer layout via the existing
+  `nav .links :global(a)` rules.
 - Anchors are styled at **element level** via `nav .links :global(a)`
   (Astro scoped styles alone would not match HTML injected as raw text), so
   injected links inherit hover, focus and touch-target styles for free.
@@ -60,12 +76,18 @@ nodes. Astro scoped styles only match elements rendered by the component,
 so runtime-created nodes would render unstyled. Keep it that way: change
 state with classes/ARIA attributes, never `createElement`.
 
-## Catalog page polish (`src/pages/index.astro`)
+## Catalog page polish (`src/pages/[...lang]/index.astro`)
 
-The property catalog is rendered client-side from PocketBase data, so its
-styles live in the page's `<style is:global>` block — Astro scoped styles
-cannot match JS-rendered nodes. Any style for catalog cards, the `dialog`
-or the form must go in that global block.
+The page moved from `src/pages/index.astro` into `[...lang]/` for the
+bilingual routes (see [docs/i18n.md](i18n.md)); relative imports are one
+level deeper (`../../lib/pb`). The property catalog is rendered
+client-side from PocketBase data, so its styles live in the page's
+`<style is:global>` block — Astro scoped styles cannot match JS-rendered
+nodes. Any style for catalog cards, the `dialog` or the form must go in
+that global block. All strings the client script renders come from
+`_ = (key, vars) => t(locale, key, vars)` with
+`locale = localeFromPath(location.pathname)`; prices go through
+`fmtMoney(locale, p.precio, 'AED')` (the old `eur()` helper is gone).
 
 Merged polish (feature 44):
 
@@ -91,12 +113,13 @@ page load with **no rebuild**.
 ### Catalog cards: photo-count badge
 
 Cards with more than one photo get a `.fotos-badge` overlay (top-right,
-`pointer-events: none`, `role="img"` + `aria-label`) so visitors know a
-gallery exists:
+`pointer-events: none`) so visitors know a gallery exists. The label is
+the localized plural `card.photos` (`{count} foto` / `{count} fotos`,
+`.one`/`.other` picked by `Intl.PluralRules`):
 
 ```js
 ${(p.fotos?.length ?? 0) > 1
-  ? `<span class="fotos-badge" role="img" aria-label="${p.fotos.length} fotos">📷 ${p.fotos.length}</span>`
+  ? `<span class="fotos-badge data">${_('card.photos', { count: p.fotos.length })}</span>`
   : ''}
 ```
 
@@ -111,13 +134,15 @@ Structure:
 
 - `.galeria-marco` — large main image (`.galeria-principal`, **original**
   file URL, `aspect-ratio: 3/2`, `object-fit: cover`) with an `aria-live=
-  "polite"` wrapper so the alt text ("foto N de M") is announced on change.
+  "polite"` wrapper so the alt text (`gallery.photoAlt`, "… — foto N de M")
+  is announced on change.
 - `.galeria-tira` — horizontally scrollable thumbnail strip
   (`overflow-x: auto`, `scroll-snap-type: x proximity`). Each thumb is a
   `<button class="galeria-mini">` wrapping an `<img>` loaded via
   `?thumb=600x400` with `loading="lazy"` — never put originals (up to 5 MB
-  each) in the strip. Each button carries `aria-label="Ver foto N de M"`
-  (the inner `<img>` has an empty `alt`). The active thumb gets `.activa` +
+  each) in the strip. Each button carries an `aria-label` from
+  `gallery.thumb` ("Ver foto N de M" / "View photo N of M"; the inner
+  `<img>` has an empty `alt`). The active thumb gets `.activa` +
   `aria-current` and is kept in view with `scrollIntoView`.
 - `.galeria-flecha.anterior` / `.siguiente` — prev/next buttons (44px
   targets, wrap-around navigation via `(i + total) % total`).
@@ -146,6 +171,12 @@ Maintainer notes — keep these invariants:
 - **Token-only styling**: colors, spacing, radii and shadows come from the
   theme variables (`--primary`, `--surface`, `--space-*`, `--radius`,
   `--shadow`, `--font-display`); no hardcoded palette values.
+- **No hardcoded copy**: every user-facing string (including aria-labels,
+  placeholders and alt text) is a key in `src/locales/{es,en}.json`
+  rendered via `t(locale, key)`; internal links go through
+  `localePath(locale, path)`. See [docs/i18n.md](i18n.md) — the
+  `locales.test.mjs` gate blocks merges on key parity, not on call sites,
+  so smoke-test `/en/` too.
 - **`src/styles/theme.css` is generated** by the factory theme
   (`brotea@2.0.0`) — never hand-edit it; restyle via tokens in component
   styles instead.

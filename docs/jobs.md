@@ -63,8 +63,10 @@ no se silencia.
 
 ## Probar y dry-run
 
-- Tests unitarios: `npm test` (ejecuta `node --test jobs/*.test.mjs` y
-  después el build de Astro; CI corre exactamente eso).
+- Tests unitarios: `npm test` (ejecuta `node --test jobs/*.test.mjs
+  src/locales/*.test.mjs` — los tests de jobs más el gate i18n del
+  escaparate, ver [docs/i18n.md](i18n.md) — y después el build de Astro;
+  CI corre exactamente eso).
 - Dry-run contra datos reales, sin enviar nada (desde la raíz de la fábrica):
   `node scripts/run-jobs.mjs --slug inmobiliaria --dry-run --force`
   Añade `--jobs-dir <ruta>/jobs` para probar el código de un worktree **antes**
