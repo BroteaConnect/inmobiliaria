@@ -6,26 +6,33 @@ import '@fontsource-variable/archivo';
 import '@fontsource-variable/archivo/wght-italic.css';
 import '../styles/identity.css';
 import Nav from '../components/Nav.astro';
-const { title = '__PROJECT_NAME__' } = Astro.props;
+import { DEFAULT_LOCALE, alternates, dirOf, localePath, stripLocale, t } from '../lib/i18n';
+
+interface Props { locale?: string }
+const { locale = DEFAULT_LOCALE } = Astro.props;
+// hreflang wants absolute URLs; `site` in astro.config makes these absolute.
+const path = stripLocale(Astro.url.pathname);
+const abs = (href: string) => (Astro.site ? new URL(href, Astro.site).href : href);
 ---
 
 <!doctype html>
-<html lang="es">
+<html lang={locale} dir={dirOf(locale)}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{title}</title>
-    <meta
-      name="description"
-      content="Vendemos pocas propiedades a la vez, y todas las hemos visitado. Cuéntanos cuál te encaja y te llamamos hoy mismo."
-    />
+    <title>{t(locale, 'page.title')}</title>
+    <meta name="description" content={t(locale, 'page.description')} />
+    {alternates(path).map((a) => (
+      <link rel="alternate" hreflang={a.hreflang} href={abs(a.href)} />
+    ))}
+    <link rel="alternate" hreflang="x-default" href={abs(localePath(DEFAULT_LOCALE, path))} />
     <!-- brotea:head -->
     <meta name="pb-url" content={import.meta.env.PUBLIC_PB_URL} />
     <script is:inline defer id="brotea-errors" src="/brotea-errors.js" data-dsn={import.meta.env.PUBLIC_GLITCHTIP_DSN}></script>
     <script is:inline defer src={import.meta.env.PUBLIC_UMAMI_SRC} data-website-id={import.meta.env.PUBLIC_UMAMI_WEBSITE_ID}></script>
   </head>
   <body>
-    <Nav />
+    <Nav locale={locale} />
     <main>
       <slot />
     </main>

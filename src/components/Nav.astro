@@ -1,24 +1,35 @@
 ---
 // Nav links. Feature installs insert their entry after the anchor below —
 // do not remove the `brotea:nav` marker (it must stay inside .links).
+// Every href goes through localePath() so a visitor never falls out of their
+// language; the drawer's aria-labels travel as data-* because the script below
+// is one bundle shared by every locale.
+import LanguageSwitcher from './LanguageSwitcher.astro';
+import { localePath, t } from '../lib/i18n';
+
+interface Props { locale: string }
+const { locale } = Astro.props;
 ---
 
 <nav>
-  <a class="brand" href="/">Inmobiliaria</a>
+  <a class="brand" href={localePath(locale, '/')}>{t(locale, 'nav.brand')}</a>
   <button
     class="menu-btn"
     type="button"
     aria-expanded="false"
     aria-controls="nav-links"
-    aria-label="Abrir menú"
+    aria-label={t(locale, 'nav.menuOpen')}
+    data-label-open={t(locale, 'nav.menuOpen')}
+    data-label-close={t(locale, 'nav.menuClose')}
   >
     <span class="bar"></span>
     <span class="bar"></span>
     <span class="bar"></span>
   </button>
   <div class="links" id="nav-links">
-    <a href="/">Home</a>
+    <a href={localePath(locale, '/')}>{t(locale, 'nav.home')}</a>
     <!-- brotea:nav -->
+    <LanguageSwitcher locale={locale} />
   </div>
 </nav>
 
@@ -32,7 +43,7 @@
   const setOpen = (open: boolean) => {
     links.classList.toggle('open', open);
     btn.setAttribute('aria-expanded', String(open));
-    btn.setAttribute('aria-label', open ? 'Cerrar menú' : 'Abrir menú');
+    btn.setAttribute('aria-label', (open ? btn.dataset.labelClose : btn.dataset.labelOpen) ?? '');
   };
 
   btn.addEventListener('click', () => setOpen(!links.classList.contains('open')));
