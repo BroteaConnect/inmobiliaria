@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "composer": "0.4.0",
+  "composer": "0.5.0",
   "stack": "astro",
   "features": {
     "analytics": {
@@ -25,5 +25,17 @@
   "theme": {
     "name": "brotea",
     "version": "2.0.0"
+  },
+  "i18n": {
+    "defaultLocale": "es",
+    "locales": [
+      "en",
+      "es"
+    ],
+    "required": [
+      "en",
+      "es"
+    ],
+    "runtime": "1.0.0"
   }
 }

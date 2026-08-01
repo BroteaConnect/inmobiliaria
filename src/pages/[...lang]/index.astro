@@ -1,39 +1,48 @@
 ---
-import Layout from '../layouts/Layout.astro';
+import Layout from '../../layouts/Layout.astro';
+import { localePaths, t } from '../../lib/i18n';
+
+// One file, every language: / (es) and /en/ come from src/locales/config.json.
+export const getStaticPaths = localePaths;
+const { locale } = Astro.props;
 ---
 
-<Layout title="Inmobiliaria — propiedades en venta">
+<Layout locale={locale}>
   <section class="hero">
-    <h1>Casas que hemos pisado.</h1>
-    <p class="lede">
-      Vendemos pocas propiedades a la vez, y todas las hemos visitado.
-      Cuéntanos cuál te encaja y te llamamos hoy mismo.
-    </p>
+    <h1>{t(locale, 'hero.title')}</h1>
+    <p class="lede">{t(locale, 'hero.lede')}</p>
     <div class="hero-filete" aria-hidden="true"></div>
   </section>
 
   <div id="catalogo" class="catalogo" aria-live="polite">
-    <p class="cargando">Abriendo el cuaderno de visitas…</p>
+    <p class="cargando">{t(locale, 'catalog.loading')}</p>
   </div>
 
   <!-- Ficha + formulario de interés (se rellena al elegir propiedad) -->
   <dialog id="ficha">
-    <button class="cerrar" id="cerrar-ficha" aria-label="Cerrar">×</button>
+    <button class="cerrar" id="cerrar-ficha" aria-label={t(locale, 'ficha.close')}>×</button>
     <div id="ficha-contenido"></div>
     <form id="interes">
-      <h3>Quiero verla por dentro</h3>
+      <h3>{t(locale, 'form.title')}</h3>
       <input type="hidden" name="propiedad" />
-      <label>Nombre <input name="nombre" required autocomplete="name" /></label>
-      <label>Teléfono <input name="telefono" required autocomplete="tel" /></label>
-      <label>Email <input name="email" type="email" autocomplete="email" /></label>
-      <label>Mensaje <textarea name="mensaje" rows="3" placeholder="Me gustaría visitarla…"></textarea></label>
-      <button type="submit">Quiero que me llamen</button>
+      <label>{t(locale, 'form.name')} <input name="nombre" required autocomplete="name" /></label>
+      <label>{t(locale, 'form.phone')} <input name="telefono" required autocomplete="tel" /></label>
+      <label>{t(locale, 'form.email')} <input name="email" type="email" autocomplete="email" /></label>
+      <label>{t(locale, 'form.message')} <textarea name="mensaje" rows="3" placeholder={t(locale, 'form.messagePlaceholder')}></textarea></label>
+      <button type="submit">{t(locale, 'form.submit')}</button>
       <p id="interes-status" role="status"></p>
     </form>
   </dialog>
 
   <script>
-    import { list, create, fileUrl, pbUrl } from '../lib/pb';
+    import { list, create, fileUrl, pbUrl } from '../../lib/pb';
+    import { fmtMoney, localeFromPath, t } from '../../lib/i18n';
+
+    // Astro bundles this script ONCE for every generated route, so the locale
+    // cannot be compiled in: it is resolved from the URL at runtime — the same
+    // source the pages were generated from (/ → es, /en/ → en).
+    const locale = localeFromPath(location.pathname);
+    const _ = (key: string, vars?: Record<string, string | number>) => t(locale, key, vars);
 
     interface Propiedad {
       id: string; collectionId: string; titulo: string; municipio: string;
@@ -41,9 +50,9 @@ import Layout from '../layouts/Layout.astro';
       descripcion: string; fotos: string[];
     }
 
-    // El mercado de la clienta opera en dirhams.
-    const eur = (n: number) => (n != null && Number.isFinite(n)
-      ? `${n.toLocaleString('es-ES', { maximumFractionDigits: 0 })} AED` : '');
+    // El mercado de la clienta opera en dirhams; Intl decide el formato por
+    // idioma ("1.234.567 AED" en es, "AED 1,234,567" en en).
+    const precio = (n: number) => (n != null && Number.isFinite(n) ? fmtMoney(locale, n, 'AED') : '');
     const foto = (p: Propiedad, thumb = true) =>
       p.fotos?.length ? fileUrl(p, p.fotos[0]) + (thumb ? '?thumb=600x400' : '') : '';
 
@@ -65,7 +74,7 @@ import Layout from '../layouts/Layout.astro';
 
     function render() {
       if (!props.length) {
-        cat.innerHTML = '<p class="cargando">Ahora mismo no hay fichas publicadas. Estamos visitando casas nuevas — vuelve en unos días.</p>';
+        cat.innerHTML = `<p class="cargando">${_('catalog.empty')}</p>`;
         return;
       }
       cat.innerHTML = props.map((p) => {
@@ -73,14 +82,14 @@ import Layout from '../layouts/Layout.astro';
         return `
         <article class="card" data-id="${p.id}">
           ${foto(p) ? `<img src="${foto(p)}" alt="${p.titulo}" loading="lazy" />` : `<div class="sinfoto">${casaSvg}</div>`}
-          ${(p.fotos?.length ?? 0) > 1 ? `<span class="fotos-badge data">${p.fotos.length} fotos</span>` : ''}
+          ${(p.fotos?.length ?? 0) > 1 ? `<span class="fotos-badge data">${_('card.photos', { count: p.fotos.length })}</span>` : ''}
           <div class="card-body">
             ${p.municipio ? `<p class="eyebrow">${p.municipio}</p>` : ''}
             <h2>${p.titulo}</h2>
             ${apunte ? `<p class="apunte">${apunte}</p>` : ''}
-            <p class="meta data">${p.habitaciones ?? '–'} hab · ${p.banos ?? '–'} baños · ${p.superficie ?? '–'} m²</p>
-            <p class="precio data">${eur(p.precio)}</p>
-            <button class="ver" data-id="${p.id}">Cómo es por dentro</button>
+            <p class="meta data">${_('card.meta', { rooms: p.habitaciones ?? '–', baths: p.banos ?? '–', area: p.superficie ?? '–' })}</p>
+            <p class="precio data">${precio(p.precio)}</p>
+            <button class="ver" data-id="${p.id}">${_('card.cta')}</button>
           </div>
         </article>`;
       }).join('');
@@ -104,7 +113,7 @@ import Layout from '../layouts/Layout.astro';
       const principal = document.createElement('img');
       principal.className = 'galeria-principal';
       principal.src = urls[0]; // la foto visible sí va a tamaño original
-      principal.alt = `${p.titulo} — foto 1 de ${total}`;
+      principal.alt = _('gallery.photoAlt', { title: p.titulo, n: 1, total });
       marco.append(principal);
       gal.append(marco);
       if (total === 1) return gal;
@@ -113,7 +122,7 @@ import Layout from '../layouts/Layout.astro';
       const ir = (i: number) => {
         actual = (i + total) % total;
         principal.src = urls[actual];
-        principal.alt = `${p.titulo} — foto ${actual + 1} de ${total}`;
+        principal.alt = _('gallery.photoAlt', { title: p.titulo, n: actual + 1, total });
         minis.forEach((m, j) => {
           m.classList.toggle('activa', j === actual);
           if (j === actual) m.setAttribute('aria-current', 'true');
@@ -129,7 +138,7 @@ import Layout from '../layouts/Layout.astro';
         b.type = 'button';
         b.className = 'galeria-mini' + (i === 0 ? ' activa' : '');
         if (i === 0) b.setAttribute('aria-current', 'true');
-        b.setAttribute('aria-label', `Ver foto ${i + 1} de ${total}`);
+        b.setAttribute('aria-label', _('gallery.thumb', { n: i + 1, total }));
         const img = document.createElement('img');
         img.src = `${u}?thumb=600x400`;
         img.alt = '';
@@ -149,7 +158,7 @@ import Layout from '../layouts/Layout.astro';
         b.addEventListener('click', () => ir(actual + delta));
         return b;
       };
-      marco.append(flecha('anterior', 'Foto anterior', -1), flecha('siguiente', 'Foto siguiente', 1));
+      marco.append(flecha('anterior', _('gallery.prev'), -1), flecha('siguiente', _('gallery.next'), 1));
       gal.append(tira);
       return gal;
     }
@@ -164,8 +173,8 @@ import Layout from '../layouts/Layout.astro';
         ${p.municipio ? `<p class="eyebrow">${p.municipio}</p>` : ''}
         <h2>${p.titulo}</h2>
         ${apunte ? `<p class="apunte">${apunte}</p>` : ''}
-        <p class="meta data">${p.habitaciones ?? '–'} hab · ${p.banos ?? '–'} baños · ${p.superficie ?? '–'} m²</p>
-        <p class="precio data">${eur(p.precio)}</p>
+        <p class="meta data">${_('card.meta', { rooms: p.habitaciones ?? '–', baths: p.banos ?? '–', area: p.superficie ?? '–' })}</p>
+        <p class="precio data">${precio(p.precio)}</p>
         ${descDuplicada ? '' : `<p>${desc}</p>`}`;
       const gal = galeria(p);
       if (gal) fichaBody.prepend(gal);
@@ -180,7 +189,7 @@ import Layout from '../layouts/Layout.astro';
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const data = Object.fromEntries(new FormData(form)) as Record<string, string>;
-      status.textContent = 'Enviando…';
+      status.textContent = _('form.sending');
       try {
         await create('leads', {
           nombre: data.nombre, telefono: data.telefono, email: data.email,
@@ -197,16 +206,16 @@ import Layout from '../layouts/Layout.astro';
           }),
         }).catch(() => {});
         form.reset();
-        status.textContent = '¡Recibido! Te llamamos muy pronto.';
+        status.textContent = _('form.thanks');
       } catch {
-        status.textContent = 'No se pudo enviar — inténtalo de nuevo o llámanos.';
+        status.textContent = _('form.error');
       }
     });
 
     if (pbUrl()) {
       list<Propiedad>('propiedades', { filter: 'estado="publicada"', sort: '-created', perPage: '50' })
         .then((r) => { props = r.items; render(); })
-        .catch(() => { cat.innerHTML = '<p class="cargando">No hemos podido abrir el catálogo. Recarga la página o llámanos.</p>'; });
+        .catch(() => { cat.innerHTML = `<p class="cargando">${_('catalog.error')}</p>`; });
     }
   </script>
 
