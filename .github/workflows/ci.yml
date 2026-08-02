@@ -1,11 +1,14 @@
 name: CI
+# FICHERO GENERADO por `brotea quality sync` (quality/gate-ci.yml en la fábrica).
+# No lo edites aquí: cambia el catálogo y re-sincroniza, o la próxima migración
+# de flota pisará tus cambios.
 on:
   push:
     branches: [main]
   pull_request:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,4 +17,23 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Sello de build + tests de la app + comprobación de tipos + build.
+      # El script `test` lo materializa la misma capacidad, así que todos los
+      # repos comprueban lo mismo y se actualizan en un sitio.
       - run: npm test
+
+  docker:
+    # Producción no construye con `npm ci`: construye con el Dockerfile. Verde
+    # en CI no era prueba de despliegue verde — un symlink de node_modules
+    # versionado tumbó un despliegue el 2026-08-01 con CI en verde. Este paso
+    # construye exactamente lo que construirá Coolify.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construir la imagen real
+        run: docker build -t ci-check:${{ github.sha }} .
+      - name: La imagen sirve el sitio construido
+        run: |
+          docker run --rm ci-check:${{ github.sha }} \
+            sh -c 'test -f /usr/share/nginx/html/index.html' \
+            || { echo "::error::la imagen no contiene index.html"; exit 1; }
