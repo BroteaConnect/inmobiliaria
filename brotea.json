@@ -37,5 +37,8 @@
       "es"
     ],
     "runtime": "1.0.0"
+  },
+  "quality": {
+    "version": "1.1.0"
   }
 }

@@ -6,3 +6,5 @@ dist
 !.env.example
 *.log
 .DS_Store
+# sello de build (generado en cada build)
+public/version.json
