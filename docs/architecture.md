@@ -16,7 +16,10 @@ datos, el seed y la documentación; el CRM vive en
 | Seed demo | `pb/seed.mjs` | este repo |
 
 La capa de UI del escaparate (nav responsive, contrato `brotea:nav`,
-convenciones de pulido) está documentada en [docs/frontend-ui.md](frontend-ui.md).
+convenciones de pulido) está documentada en [docs/frontend-ui.md](frontend-ui.md);
+su identidad visual (paleta, escala tipográfica, el apunte de visita y el
+contrato de cascada `theme.css` → `identity.css`) en
+[docs/visual-identity.md](visual-identity.md).
 El escaparate es bilingüe es/en sobre el contrato i18n de la fábrica
 (rutas `[...lang]`, `t()`, `LanguageSwitcher`, gate de CI) — ver
 [docs/i18n.md](i18n.md); los datos de las propiedades (titulo,
@@ -48,8 +51,11 @@ resumen 20:00 por Telegram) en [docs/jobs.md](jobs.md).
 - Datos de demo → skill `demo-data`.
 - Jobs programados → skill `jobs` (añadir/modificar `jobs/*.mjs`).
 - Código → PR normal de la fábrica: CI verde → auto-merge → deploy.
-- El tema visual es `brotea@2.0.0` (lockfile `brotea.json`); para la marca de
-  la clienta: crear su tema en el catálogo de la fábrica y `brotea theme`.
+- El tema base es `brotea@2.0.0` (lockfile `brotea.json`, `src/styles/theme.css`
+  generado). La identidad de la clienta la sobrescribe
+  `src/styles/identity.css`, que se importa después → regenerar el tema es
+  inocuo. Nunca editar `theme.css` a mano
+  ([docs/visual-identity.md](visual-identity.md)).
 
 ## Seguimiento de contactos (2026-07-29)
 

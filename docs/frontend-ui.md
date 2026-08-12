@@ -10,6 +10,11 @@ UI copy comes from `src/locales/{es,en}.json` via `t(locale, key)` and
 every internal href goes through `localePath()`. The full contract is in
 [docs/i18n.md](i18n.md); below only the UI-structure consequences.
 
+The palette, type scale and signature element ("el apunte de visita") come
+from feature 47 and live in `src/styles/identity.css`; they are documented
+in [docs/visual-identity.md](visual-identity.md). This page covers UI
+structure only — which token to use for which job is over there.
+
 ## Nav component (`src/components/Nav.astro`)
 
 The component takes a required `locale` prop (i18n contract: components
@@ -168,9 +173,11 @@ Maintainer notes — keep these invariants:
   drawer, buttons, form controls, dialog close).
 - **`:focus-visible` outlines** on every interactive element
   (`outline: 2px solid var(--primary); outline-offset: 2px`).
-- **Token-only styling**: colors, spacing, radii and shadows come from the
-  theme variables (`--primary`, `--surface`, `--space-*`, `--radius`,
-  `--shadow`, `--font-display`); no hardcoded palette values.
+- **Token-only styling**: colors, spacing, radii, shadows and font sizes
+  come from the variables (`--primary`, `--surface`, `--space-*`,
+  `--radius`, `--shadow`, `--font-display`, `--text-*`); no hardcoded
+  values. Which token means what — and the `--accent`/apunte invariants —
+  is in [docs/visual-identity.md](visual-identity.md).
 - **No hardcoded copy**: every user-facing string (including aria-labels,
   placeholders and alt text) is a key in `src/locales/{es,en}.json`
   rendered via `t(locale, key)`; internal links go through
@@ -178,5 +185,6 @@ Maintainer notes — keep these invariants:
   `locales.test.mjs` gate blocks merges on key parity, not on call sites,
   so smoke-test `/en/` too.
 - **`src/styles/theme.css` is generated** by the factory theme
-  (`brotea@2.0.0`) — never hand-edit it; restyle via tokens in component
-  styles instead.
+  (`brotea@2.0.0`) — never hand-edit it. Client-specific tokens go in
+  `src/styles/identity.css`, imported after it so it wins by cascade order
+  ([docs/visual-identity.md](visual-identity.md)).
