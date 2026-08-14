@@ -1,5 +1,5 @@
 {
-  "$comment": "Modelo de datos del sistema inmobiliario. Se aplica con: node scripts/pb-schema.mjs inmobiliaria pb/schema.json (desde la raíz de la fábrica). Aditivo: nunca borra campos existentes. OJO: PocketBase >=0.23 no crea created/updated solo — todo sort por fecha exige declarar los campos autodate de abajo.",
+  "$comment": "Modelo de datos del sistema inmobiliario. Se aplica con: node scripts/pb-schema.mjs inmobiliaria pb/schema.json (desde la raíz de la fábrica). Aditivo: nunca borra campos existentes. Los permisos se declaran como INTENCION en `access` y los compila scripts/lib/access.mjs: `public` dice en voz alta lo que una regla vacia solo insinuaba. OJO: PocketBase >=0.23 no crea created/updated solo — todo sort por fecha exige declarar los campos autodate de abajo.",
   "collections": [
     {
       "name": "propietarios",
@@ -34,12 +34,12 @@
           "onUpdate": true
         }
       ],
-      "rules": {
-        "list": "@request.auth.id != \"\"",
-        "view": "@request.auth.id != \"\"",
-        "create": "@request.auth.id != \"\"",
-        "update": "@request.auth.id != \"\"",
-        "delete": "@request.auth.id != \"\""
+      "access": {
+        "list": "signed-in",
+        "view": "signed-in",
+        "create": "signed-in",
+        "update": "signed-in",
+        "delete": "signed-in"
       }
     },
     {
@@ -123,12 +123,16 @@
           "onUpdate": true
         }
       ],
-      "rules": {
-        "list": "estado = \"publicada\" || @request.auth.id != \"\"",
-        "view": "estado = \"publicada\" || @request.auth.id != \"\"",
-        "create": "@request.auth.id != \"\"",
-        "update": "@request.auth.id != \"\"",
-        "delete": "@request.auth.id != \"\""
+      "access": {
+        "list": {
+          "raw": "estado = \"publicada\" || @request.auth.id != \"\""
+        },
+        "view": {
+          "raw": "estado = \"publicada\" || @request.auth.id != \"\""
+        },
+        "create": "signed-in",
+        "update": "signed-in",
+        "delete": "signed-in"
       }
     },
     {
@@ -203,12 +207,12 @@
           "onUpdate": true
         }
       ],
-      "rules": {
-        "list": "@request.auth.id != \"\"",
-        "view": "@request.auth.id != \"\"",
-        "create": "",
-        "update": "@request.auth.id != \"\"",
-        "delete": "@request.auth.id != \"\""
+      "access": {
+        "list": "signed-in",
+        "view": "signed-in",
+        "create": "public",
+        "update": "signed-in",
+        "delete": "signed-in"
       }
     },
     {
@@ -279,12 +283,12 @@
           "onUpdate": true
         }
       ],
-      "rules": {
-        "list": "@request.auth.id != \"\"",
-        "view": "@request.auth.id != \"\"",
-        "create": "@request.auth.id != \"\"",
-        "update": "@request.auth.id != \"\"",
-        "delete": "@request.auth.id != \"\""
+      "access": {
+        "list": "signed-in",
+        "view": "signed-in",
+        "create": "signed-in",
+        "update": "signed-in",
+        "delete": "signed-in"
       }
     }
   ]
