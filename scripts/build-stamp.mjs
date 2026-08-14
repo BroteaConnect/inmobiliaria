@@ -1,21 +1,22 @@
 #!/usr/bin/env node
-// build-stamp.mjs — escribe public/version.json con el commit del que salió el
-// build. Fichero GENERADO en cada app por `brotea quality sync`: se arregla en
-// la fábrica (quality/build-stamp.mjs), no en el repo del proyecto.
+// build-stamp.mjs — writes public/version.json with the commit the build came
+// from. File GENERATED in every app by `brotea quality sync`: fix it in the
+// factory (quality/build-stamp.mjs), not in the project's repo.
 //
-// ¿Por qué existe? Porque hasta hoy no había forma de responder «¿la web sirve
-// el código que revisamos?». Coolify guarda `git_commit_sha: "HEAD"` (no un SHA)
-// y no pasa el commit como build-arg, así que el plano de control no lo sabe. Y
-// el caso que de verdad importa no lo detecta ninguna base de datos: un
-// despliegue que falla deja el contenedor ANTERIOR sirviendo, con CI en verde y
-// la fila de despliegue diciendo que todo fue bien (nos pasó el 2026-08-01 con
-// maría-limpieza: `/` respondía 200 con la versión vieja y `/en/` daba 404).
-// Solo un sello que responda la propia web distingue eso.
+// Why does it exist? Because until today there was no way to answer "is the
+// site serving the code we reviewed?". Coolify stores `git_commit_sha: "HEAD"`
+// (not a SHA) and does not pass the commit as a build-arg, so the control
+// plane does not know it. And the case that really matters is caught by no
+// database: a failed deploy leaves the PREVIOUS container serving, with green
+// CI and the deployment row saying everything went fine (it happened to us on
+// 2026-08-01 with maría-limpieza: `/` answered 200 with the old version and
+// `/en/` gave a 404). Only a stamp the site itself serves tells those apart.
 //
-// El commit llega en PUBLIC_BUILD_COMMIT, que la fábrica pone como variable de
-// build antes de desplegar. Si falta —build local, o alguien lanzó el deploy a
-// mano desde Coolify— se cae al git del contexto y, si tampoco, a "unknown":
-// un sello honesto que dice "no lo sé" vale más que uno inventado.
+// The commit arrives in PUBLIC_BUILD_COMMIT, which the factory sets as a build
+// variable before deploying. If it is missing —local build, or someone fired
+// the deploy by hand from Coolify— it falls back to the context's git and, if
+// that fails too, to "unknown": an honest stamp saying "I don't know" is worth
+// more than an invented one.
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
