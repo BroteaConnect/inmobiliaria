@@ -6,11 +6,17 @@ interface Props { titulo: string; actualizado: string }
 const { titulo, actualizado } = Astro.props;
 ---
 
-<article class="legal">
+<article class="legal" data-legal>
   <h1>{titulo}</h1>
   <p class="legal-fecha">{actualizado}</p>
   <slot />
 </article>
+
+<script>
+  // Los datos del titular los pone el CRM, no este repositorio.
+  import { pintarNegocio } from '../lib/negocio';
+  pintarNegocio(document.documentElement.dataset.negocioPendiente ?? '(pendiente)');
+</script>
 
 <style>
   .legal { max-width: var(--measure, 68ch); margin: 0 auto; padding: var(--space-5) 0 var(--space-6); }
@@ -19,4 +25,7 @@ const { titulo, actualizado } = Astro.props;
   .legal :global(section) { margin-top: var(--space-5); }
   .legal :global(h2) { font-size: 1.05rem; margin-bottom: var(--space-2); }
   .legal :global(p) { line-height: 1.65; }
+  /* Un hueco sin rellenar se ve: un aviso legal con un blanco mudo parece
+     completo y no lo está. */
+  .legal :global(.negocio-pendiente) { color: var(--muted); font-style: italic; }
 </style>

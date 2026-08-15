@@ -31,6 +31,10 @@ const l = (path: string) => localePath(locale, path);
     <div>
       <h2>{t(locale, 'footer.contacto')}</h2>
       <ul class="pie-contacto">
+        {/* Los rellena el CRM al cargar; vacíos se marcan como pendientes. */}
+        <li><span data-negocio="telefono"></span></li>
+        <li><span data-negocio="email"></span></li>
+        <li><span data-negocio="domicilio"></span></li>
         <li>{t(locale, 'footer.horario')}</li>
       </ul>
     </div>
@@ -45,8 +49,16 @@ const l = (path: string) => localePath(locale, path);
     </nav>
   </div>
 
-  <p class="pie-rgpd">{t(locale, 'footer.rgpd')}</p>
+  <p class="pie-rgpd">
+    <span data-negocio="razonSocial"></span> · <span data-negocio="registro"></span><br />
+    {t(locale, 'footer.rgpd')}
+  </p>
 </footer>
+
+<script>
+  import { pintarNegocio } from '../lib/negocio';
+  pintarNegocio(document.documentElement.dataset.negocioPendiente ?? '(pendiente)');
+</script>
 
 <style>
   .pie { background: var(--bg-invert); color: var(--text-invert); margin-top: var(--space-6); }
@@ -63,6 +75,7 @@ const l = (path: string) => localePath(locale, path);
   .pie-marca strong { font-family: var(--font-display); font-size: 1.1rem; }
   .pie-marca p { margin: var(--space-2) 0 0; opacity: .75; font-size: .9rem; }
   .pie-contacto li { opacity: .75; }
+  .pie :global(.negocio-pendiente) { opacity: .55; font-style: italic; }
   .pie-rgpd {
     max-width: var(--container); margin: 0 auto;
     padding: var(--space-3) var(--space-4) var(--space-5);
