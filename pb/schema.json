@@ -263,7 +263,8 @@
             "entregado",
             "abierto",
             "click",
-            "error"
+            "error",
+            "simulado"
           ]
         },
         {
@@ -281,6 +282,32 @@
           "type": "autodate",
           "onCreate": true,
           "onUpdate": true
+        }
+      ],
+      "access": {
+        "list": "signed-in",
+        "view": "signed-in",
+        "create": "signed-in",
+        "update": "signed-in",
+        "delete": "signed-in"
+      }
+    },
+    {
+      "$comment": "CRM configuration: which modules are on, and which adapter each integration uses. One row per `key`. This format declares no indexes, so uniqueness is not expressible here — the CRM's data layer enforces it instead (read by filter key=\"...\", update if found, create if not). NEVER store secrets: any signed-in user can read this collection and the browser bundle is public, so credentials keep living in the chassis and this only records WHICH adapter is selected. `value` is versioned so a later migration is possible: modules.<id> -> {v, enabled}; integrations.<id> -> {v, adapter, config}. No hand-written created/updated: compileFields appends both autodate fields by itself.",
+      "name": "settings",
+      "fields": [
+        {
+          "name": "key",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "value",
+          "type": "json"
+        },
+        {
+          "name": "note",
+          "type": "text"
         }
       ],
       "access": {

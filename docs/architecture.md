@@ -43,7 +43,8 @@ resumen 20:00 por Telegram) en [docs/jobs.md](jobs.md).
 - `propiedades`: lectura pública SOLO si `estado="publicada"`; todo lo demás
   requiere sesión (la intermediaria, colección `users`).
 - `leads`: `create` público (el formulario), el resto con sesión.
-- `propietarios`/`actividades`: todo con sesión.
+- `propietarios`/`actividades`/`settings`: todo con sesión. `settings` nunca es
+  pública: el mapa de módulos de un CRM privado no es información pública.
 
 ## Cómo se actualiza (usa las skills de .claude/skills/)
 
@@ -72,6 +73,47 @@ resumen 20:00 por Telegram) en [docs/jobs.md](jobs.md).
 - **Límite honesto de WhatsApp**: se registra que la agente inició el
   contacto (el click), no la entrega ni la respuesta. Eso exige la WhatsApp
   Business Cloud API (fase 2: cuenta Meta verificada + plantillas).
+
+## Configuration and mock adapters (2026-08-15)
+
+Written in English: the factory produces English prose, and this section is new.
+The rest of this document predates that rule and is left as it is.
+
+The CRM grows one module at a time, and a module usually needs a service the
+project cannot pay for yet — a WhatsApp Business account, an LLM, a maps key.
+Two pieces make that survivable, and they meet in the `settings` collection.
+
+**`settings` is the switchboard.** One row per `key`, `value` a versioned JSON
+blob:
+
+```
+modules.<id>       -> { "v": 1, "enabled": true }
+integrations.<id>  -> { "v": 1, "adapter": "mock" | "live", "config": { ... } }
+```
+
+The format declares no indexes, so uniqueness of `key` is not expressible in
+`pb/schema.json`. The CRM's data layer enforces it instead: read by
+`filter: key="…"`, update if found, create if not. Defaults live in the CRM's
+code, so a missing row — or a schema not applied yet — resolves to the default
+rather than to a blank screen, the same defensive posture as `t()` on a missing
+key.
+
+**No secrets in `settings`.** Every signed-in user can read the collection and
+the browser bundle is public. Credentials keep following the precedent of
+`enviarEmail`: the secret lives in the chassis and the browser only holds
+`PUBLIC_OUTBOUND_SECRET`. `settings` records *which* adapter is selected, never
+how to authenticate it.
+
+**A mock must say it is a mock.** Each integration is a port with a `mock` and a
+`live` adapter (`live` may be `null` — not built yet, and the Configuration
+screen lists it as unavailable instead of offering a toggle that lies). Every
+mock receipt carries `simulated: true`, the UI shows a translated marker, and a
+simulated send writes `estado_envio: "simulado"` — a value added to
+`actividades` for exactly this reason. Writing `enviado` would tell the agent a
+message left that never left, and the digest job counts delivery states. The
+counters in `jobs/lib.mjs` only add up `entregado|abierto|click`, so `simulado`
+cannot inflate them. This is the same honesty the WhatsApp and email-open limits
+above are written down for.
 
 ## Deuda consciente / siguiente iteración
 
