@@ -79,5 +79,9 @@
   "privacidad.terceros.texto": "The data is stored in our own database hosted in the European Union. This site also uses cookieless analytics (Umami, self-hosted) and error capture (GlitchTip, self-hosted); neither receives what you type into the form.",
   "privacidad.terceros.titulo": "Who else sees them",
   "privacidad.titulo": "Privacy policy",
-  "site.name": "Inmobiliaria"
+  "site.name": "Inmobiliaria",
+  "wa.barra": "💬 Message us on WhatsApp",
+  "wa.mensajeGeneral": "Hello, I am writing from your website.",
+  "wa.mensajePropiedad": "Hello, I am interested in \"{propiedad}\".",
+  "wa.preguntar": "💬 Ask about this home"
 }
