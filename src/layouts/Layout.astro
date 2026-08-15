@@ -20,7 +20,7 @@ const abs = (href: string) => (Astro.site ? new URL(href, Astro.site).href : hre
 ---
 
 <!doctype html>
-<html lang={locale} dir={dirOf(locale)}>
+<html lang={locale} dir={dirOf(locale)} data-negocio-pendiente={t(locale, 'negocio.pendiente')}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
