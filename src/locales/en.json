@@ -38,6 +38,15 @@
   "form.consent": "I agree to be contacted about this property. See the <a href=\"/en/privacidad\">privacy policy</a>.",
   "form.email": "Email",
   "form.error": "It could not be sent — try again or give us a call.",
+  "form.franja": "When suits you?",
+  "form.franja.finde": "Weekends",
+  "form.franja.mananas": "Mornings",
+  "form.franja.tardes": "Afternoons",
+  "form.hecho.sub": "We'll call you today to arrange the viewing.",
+  "form.hecho.telefono": "We'll call from {telefono}.",
+  "form.hecho.titulo": "Done, {nombre}.",
+  "form.hecho.tituloAnonimo": "Done.",
+  "form.hecho.volver": "← Keep browsing properties",
   "form.message": "Message",
   "form.messagePlaceholder": "I would like to see it…",
   "form.name": "Name",
@@ -81,8 +90,9 @@
   "privacidad.terceros.titulo": "Who else sees them",
   "privacidad.titulo": "Privacy policy",
   "site.name": "Inmobiliaria",
-  "wa.barra": "💬 Message us on WhatsApp",
+  "wa.adelantar": "Get ahead on WhatsApp",
+  "wa.barra": "Message us on WhatsApp",
   "wa.mensajeGeneral": "Hello, I am writing from your website.",
   "wa.mensajePropiedad": "Hello, I am interested in \"{propiedad}\".",
-  "wa.preguntar": "💬 Ask about this home"
+  "wa.preguntar": "Ask about this home"
 }

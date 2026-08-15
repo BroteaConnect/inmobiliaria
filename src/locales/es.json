@@ -38,6 +38,15 @@
   "form.consent": "Acepto que me contactéis sobre esta propiedad. Consulta la <a href=\"/privacidad\">política de privacidad</a>.",
   "form.email": "Email",
   "form.error": "No se pudo enviar — inténtalo de nuevo o llámanos.",
+  "form.franja": "¿Cuándo te va bien?",
+  "form.franja.finde": "Fin de semana",
+  "form.franja.mananas": "Mañanas",
+  "form.franja.tardes": "Tardes",
+  "form.hecho.sub": "Te llamamos hoy mismo para cuadrar la visita.",
+  "form.hecho.telefono": "Te llamaremos desde el {telefono}.",
+  "form.hecho.titulo": "Hecho, {nombre}.",
+  "form.hecho.tituloAnonimo": "Hecho.",
+  "form.hecho.volver": "← Seguir viendo propiedades",
   "form.message": "Mensaje",
   "form.messagePlaceholder": "Me gustaría visitarla…",
   "form.name": "Nombre",
@@ -81,8 +90,9 @@
   "privacidad.terceros.titulo": "Quién más los ve",
   "privacidad.titulo": "Política de privacidad",
   "site.name": "Inmobiliaria",
-  "wa.barra": "💬 Escríbenos por WhatsApp",
+  "wa.adelantar": "Adelantar por WhatsApp",
+  "wa.barra": "Escríbenos por WhatsApp",
   "wa.mensajeGeneral": "Hola, os escribo desde la web.",
   "wa.mensajePropiedad": "Hola, me interesa «{propiedad}».",
-  "wa.preguntar": "💬 Preguntar por esta casa"
+  "wa.preguntar": "Preguntar por esta casa"
 }

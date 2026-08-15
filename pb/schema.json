@@ -195,6 +195,16 @@
           "onlyInt": true
         },
         {
+          "name": "franja",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "mananas",
+            "tardes",
+            "finde"
+          ]
+        },
+        {
           "name": "consentimiento",
           "type": "bool"
         },
