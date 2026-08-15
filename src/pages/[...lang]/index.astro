@@ -258,10 +258,36 @@ const { locale } = Astro.props;
     .ver:hover { filter: brightness(1.06); box-shadow: var(--shadow); }
     .ver:active { transform: translateY(1px); filter: brightness(.97); }
     .ver:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-    dialog#ficha { border: 1px solid var(--border); border-radius: var(--radius-lg);
-                   background: var(--surface); color: var(--text); max-width: 640px; width: 92vw;
-                   padding: var(--space-5); max-height: min(85dvh, 720px); overflow-y: auto; }
+    /* La ficha se abre a un lado, no en el centro. Quien mira una propiedad
+       está recorriendo el catálogo: un modal centrado le quita la lista de
+       delante y le obliga a reencontrar dónde estaba al cerrarlo. El panel la
+       deja detrás, atenuada y en su sitio. Es <dialog> igual que antes, así que
+       la trampa de foco, Escape y la capa superior siguen saliendo gratis. */
+    /* `inset` + `margin: 0` en vez de `margin-left: auto`: el estilo de agente
+       de usuario le pone a un <dialog> `max-width: calc(100% - 6px - 2em)` y
+       márgenes automáticos, y con eso el panel se quedaba en 358 px de 390 en
+       el móvil —medido, no supuesto—. Fijando los bordes no hay nada que
+       negociar con el navegador. */
+    dialog#ficha { border: 0; border-inline-start: 1px solid var(--border); border-radius: 0;
+                   background: var(--surface); color: var(--text);
+                   position: fixed; inset: 0 0 0 auto; margin: 0;
+                   width: min(34rem, 100%); max-width: 100%;
+                   height: 100dvh; max-height: none;
+                   padding: var(--space-5); overflow-y: auto; }
     dialog#ficha::backdrop { background: rgba(20, 52, 51, .55); }
+    @media (prefers-reduced-motion: no-preference) {
+      dialog#ficha[open] { animation: ficha-entra .18s ease-out; }
+      @keyframes ficha-entra { from { transform: translateX(2rem); opacity: 0; }
+                               to { transform: none; opacity: 1; } }
+    }
+    /* En el móvil no hay catálogo detrás que preservar: ocupa la pantalla. */
+    /* En el móvil se estira entre los cuatro bordes en vez de declarar un
+       ancho: con `inset: 0` y `width: auto` no hay porcentaje que el navegador
+       pueda resolver contra otra cosa —medido: con `width: 100%` se quedaba en
+       358 de 390—. */
+    @media (max-width: 640px) {
+      dialog#ficha { inset: 0; width: 100dvw; height: 100dvh; max-width: 100dvw; max-height: 100dvh; }
+    }
     dialog#ficha h2 { font-size: var(--text-display-lg); font-weight: 700;
                       letter-spacing: -0.015em; line-height: 1.15; margin: var(--space-2) 0; }
     dialog#ficha .apunte { margin: var(--space-2) 0 var(--space-3); }
