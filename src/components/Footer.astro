@@ -1,0 +1,75 @@
+---
+import { localePath, t } from '../lib/i18n';
+
+// El pie, y con él lo que faltaba para que este sitio pueda pedir datos: los
+// tres enlaces legales y la línea de RGPD.
+//
+// Hasta hoy el formulario mandaba nombre, teléfono y email a una base de datos
+// mientras la página cargaba analítica y captura de errores, sin política de
+// privacidad, sin aviso legal y sin decir en ninguna parte para qué se usan.
+// Eso no es un hueco de diseño, es lo que hace que recoger el dato sea legal o
+// no lo sea.
+interface Props { locale: string }
+const { locale } = Astro.props;
+const l = (path: string) => localePath(locale, path);
+---
+
+<footer class="pie">
+  <div class="pie-cols">
+    <div class="pie-marca">
+      <strong>{t(locale, 'site.name')}</strong>
+      <p>{t(locale, 'footer.claim')}</p>
+    </div>
+
+    <nav aria-labelledby="pie-props">
+      <h2 id="pie-props">{t(locale, 'footer.propiedades')}</h2>
+      <ul>
+        <li><a href={l('/#catalogo')}>{t(locale, 'footer.enVenta')}</a></li>
+      </ul>
+    </nav>
+
+    <div>
+      <h2>{t(locale, 'footer.contacto')}</h2>
+      <ul class="pie-contacto">
+        <li>{t(locale, 'footer.horario')}</li>
+      </ul>
+    </div>
+
+    <nav aria-labelledby="pie-legal">
+      <h2 id="pie-legal">{t(locale, 'footer.legal')}</h2>
+      <ul>
+        <li><a href={l('/aviso-legal')}>{t(locale, 'footer.aviso')}</a></li>
+        <li><a href={l('/privacidad')}>{t(locale, 'footer.privacidad')}</a></li>
+        <li><a href={l('/cookies')}>{t(locale, 'footer.cookies')}</a></li>
+      </ul>
+    </nav>
+  </div>
+
+  <p class="pie-rgpd">{t(locale, 'footer.rgpd')}</p>
+</footer>
+
+<style>
+  .pie { background: var(--bg-invert); color: var(--text-invert); margin-top: var(--space-6); }
+  .pie-cols {
+    max-width: var(--container); margin: 0 auto;
+    padding: var(--space-6) var(--space-4) var(--space-5);
+    display: grid; gap: var(--space-5);
+    grid-template-columns: 1.4fr 1fr 1fr 1fr;
+  }
+  .pie h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .1em;
+            margin: 0 0 var(--space-3); opacity: .7; font-weight: 600; }
+  .pie ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+  .pie a { color: inherit; text-underline-offset: 3px; }
+  .pie-marca strong { font-family: var(--font-display); font-size: 1.1rem; }
+  .pie-marca p { margin: var(--space-2) 0 0; opacity: .75; font-size: .9rem; }
+  .pie-contacto li { opacity: .75; }
+  .pie-rgpd {
+    max-width: var(--container); margin: 0 auto;
+    padding: var(--space-3) var(--space-4) var(--space-5);
+    border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    font-size: .78rem; opacity: .7;
+  }
+  /* En una columna en el móvil: el mismo contenido, no una versión recortada.
+     Un pie legal que se esconde en pantallas pequeñas es un pie que no está. */
+  @media (max-width: 720px) { .pie-cols { grid-template-columns: 1fr; } }
+</style>

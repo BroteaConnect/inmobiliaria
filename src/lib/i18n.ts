@@ -70,6 +70,41 @@ export function t(locale: Locale, key: string, vars?: Vars): string {
 /** Bind t() to a locale — `const _ = tt(locale); _('nav.home')`. */
 export const tt = (locale: Locale) => (key: string, vars?: Vars) => t(locale, key, vars);
 
+/**
+ * Is there real copy for this key? `t()` falls back to the key itself, so a
+ * page cannot tell "translated" from "missing" by looking at what it got back.
+ *
+ * This is what lets a page be built out of sections that exist only when
+ * somebody wrote them: the copy is the content, not a placeholder waiting to be
+ * filled in. Presence is judged in the DEFAULT locale, so a section does not
+ * appear and disappear depending on which language a visitor reads — a page
+ * that is structurally different per language is a page nobody can review.
+ */
+export const has = (key: string): boolean => {
+  const v = (DICTS[DEFAULT_LOCALE] ?? {})[key];
+  return v != null && String(v).trim() !== '';
+};
+
+/**
+ * The numbers a series actually has, from a pattern with `{n}` in it:
+ * `series('features.{n}.title')`, `series('how.step{n}')`.
+ *
+ * The pattern says where the number goes rather than the function guessing,
+ * because guessing produced `how.step.1` for keys named `how.step1` and the
+ * section simply did not render — no error, no empty heading, nothing.
+ *
+ * Counting stops at the first gap: a series with a hole is a mistake, and
+ * rendering around it would hide it.
+ */
+export function series(pattern: string, max = 24): number[] {
+  const out: number[] = [];
+  for (let n = 1; n <= max; n += 1) {
+    if (!has(pattern.replace('{n}', String(n)))) break;
+    out.push(n);
+  }
+  return out;
+}
+
 // -- URLs ---------------------------------------------------------------------
 // The default locale is unprefixed ('/'), every other locale lives under
 // '/<code>/'. Retrofitting a live site therefore never changes its URLs.
@@ -101,6 +136,44 @@ export const localePaths = () => LOCALES.map((locale) => ({
   params: { lang: locale === DEFAULT_LOCALE ? undefined : locale },
   props: { locale },
 }));
+
+/**
+ * The locale of THIS render — from the props when the page was generated at
+ * build time, from the URL when it is rendered per request.
+ *
+ * A page must use this instead of `Astro.props.locale`, because a page that
+ * reads only the props is correct on a static stack and silently monolingual
+ * on a server one: `getStaticPaths` is IGNORED when `output: 'server'`, so
+ * `props.locale` is undefined on every request and `t()` falls back to the
+ * default language. `/en/` then renders Spanish, with a green build and a
+ * warning nobody reads. Measured on the first SSR canary.
+ */
+export function localeOf(ctx: { props?: { locale?: unknown }; params?: { lang?: unknown } }): Locale {
+  if (isLocale(ctx?.props?.locale)) return ctx.props!.locale as Locale;
+  // `lang` is a rest parameter: '' at the root, 'en' under /en/, and
+  // 'en/deeper' for a nested route that reuses it.
+  const raw = ctx?.params?.lang;
+  const seg = (Array.isArray(raw) ? raw[0] : typeof raw === 'string' ? raw.split('/')[0] : '') ?? '';
+  return isLocale(seg) ? seg : DEFAULT_LOCALE;
+}
+
+/**
+ * True when the URL names a language that does not exist (`/de/` on a
+ * Spanish+English app). On a static stack those URLs simply were not
+ * generated; on a server one they render the default language at a made-up
+ * address, which is a 200 for a page that should not exist. Pages answer 404.
+ */
+export function unknownLocale(ctx: { params?: { lang?: unknown } }): boolean {
+  const raw = ctx?.params?.lang;
+  const segs = (Array.isArray(raw) ? raw : String(raw ?? '').split('/')).filter(Boolean);
+  if (segs.length === 0) return false;
+  // `[...lang]` is a REST parameter: on a server stack it answers
+  // /anything/at/all with whatever page owns the route, so a URL nobody wrote
+  // renders the home page and returns 200. A page whose route is
+  // `[...lang]/x.astro` only ever sees the locale here, so more than one
+  // segment means the URL is not this page's.
+  return segs.length > 1 || !isLocale(segs[0]);
+}
 
 /** hreflang alternates for <head> — every locale, plus x-default. */
 export const alternates = (path = '/') =>

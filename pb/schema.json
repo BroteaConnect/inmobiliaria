@@ -195,6 +195,19 @@
           "onlyInt": true
         },
         {
+          "name": "consentimiento",
+          "type": "bool"
+        },
+        {
+          "name": "consentimiento_en",
+          "type": "date"
+        },
+        {
+          "name": "consentimiento_texto",
+          "type": "text",
+          "max": 300
+        },
+        {
           "name": "created",
           "type": "autodate",
           "onCreate": true,

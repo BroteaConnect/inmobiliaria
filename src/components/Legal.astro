@@ -1,0 +1,22 @@
+---
+// El marco de las tres páginas legales: mismo ancho de lectura, misma tipografía
+// y la fecha de actualización arriba, que es lo primero que mira quien las
+// consulta en serio.
+interface Props { titulo: string; actualizado: string }
+const { titulo, actualizado } = Astro.props;
+---
+
+<article class="legal">
+  <h1>{titulo}</h1>
+  <p class="legal-fecha">{actualizado}</p>
+  <slot />
+</article>
+
+<style>
+  .legal { max-width: var(--measure, 68ch); margin: 0 auto; padding: var(--space-5) 0 var(--space-6); }
+  .legal h1 { font-family: var(--font-display); }
+  .legal-fecha { color: var(--muted); font-size: .85rem; margin-top: calc(var(--space-2) * -1); }
+  .legal :global(section) { margin-top: var(--space-5); }
+  .legal :global(h2) { font-size: 1.05rem; margin-bottom: var(--space-2); }
+  .legal :global(p) { line-height: 1.65; }
+</style>

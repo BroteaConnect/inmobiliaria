@@ -36,6 +36,18 @@
       "en",
       "es"
     ],
+    "native": {
+      "en": "English",
+      "es": "Español"
+    },
+    "dir": {
+      "en": "ltr",
+      "es": "ltr"
+    },
+    "intl": {
+      "en": "en-GB",
+      "es": "es-ES"
+    },
     "runtime": "1.0.0"
   },
   "quality": {

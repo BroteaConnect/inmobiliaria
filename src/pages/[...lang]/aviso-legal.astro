@@ -1,0 +1,22 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { localeOf, localePaths, t, unknownLocale } from '../../lib/i18n';
+import Legal from '../../components/Legal.astro';
+
+export const getStaticPaths = localePaths;
+if (unknownLocale(Astro)) return new Response(null, { status: 404 });
+const locale = localeOf(Astro);
+
+const claves = ['titular', 'objeto', 'condiciones', 'propiedad', 'ley'];
+---
+
+<Layout title={t(locale, 'aviso.titulo')} locale={locale}>
+  <Legal titulo={t(locale, 'aviso.titulo')} actualizado={t(locale, 'legal.actualizado')}>
+    {claves.map((k) => (
+      <section>
+        <h2>{t(locale, `aviso.${k}.titulo`)}</h2>
+        <p set:html={t(locale, `aviso.${k}.texto`)} />
+      </section>
+    ))}
+  </Legal>
+</Layout>
