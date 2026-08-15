@@ -187,13 +187,39 @@ const { locale } = Astro.props;
         ${descDuplicada ? '' : `<p>${desc}</p>`}`;
       const gal = galeria(p);
       if (gal) fichaBody.prepend(gal);
+      ficha.dispatchEvent(new CustomEvent('brotea:ficha', { detail: { titulo: p.titulo } }));
       (form.elements.namedItem('propiedad') as HTMLInputElement).value = p.id;
       status.textContent = '';
       form.hidden = false;
       ficha.showModal();
+      // La ficha abierta vive en la URL. Sin esto no hay forma de mandarle una
+      // propiedad a alguien por WhatsApp —que es exactamente lo que hace la
+      // gente— y el botón «atrás» del móvil se sale del sitio en vez de cerrar
+      // el panel. `pushState` no recarga nada: el catálogo ya está en memoria.
+      if (new URLSearchParams(location.search).get('p') !== id) {
+        history.pushState({ p: id }, '', `?p=${encodeURIComponent(id)}`);
+      }
     }
 
-    document.getElementById('cerrar-ficha')!.addEventListener('click', () => ficha.close());
+    /** Cierra y borra la propiedad de la URL, sin dejar una entrada más atrás. */
+    function cerrar(volviendo = false) {
+      if (ficha.open) ficha.close();
+      if (!volviendo && new URLSearchParams(location.search).has('p')) {
+        history.pushState({}, '', location.pathname);
+      }
+    }
+
+    // Atrás cierra el panel; adelante lo vuelve a abrir.
+    addEventListener('popstate', () => {
+      const id = new URLSearchParams(location.search).get('p');
+      if (id && props.some((x) => x.id === id)) abrir(id);
+      else cerrar(true);
+    });
+
+    document.getElementById('cerrar-ficha')!.addEventListener('click', () => cerrar());
+    // Escape y el clic en el fondo pasan por aquí: una sola salida, y la URL
+    // nunca se queda apuntando a una ficha cerrada.
+    ficha.addEventListener('close', () => cerrar(true));
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -227,8 +253,57 @@ const { locale } = Astro.props;
 
     if (pbUrl()) {
       list<Propiedad>('propiedades', { filter: 'estado="publicada"', sort: '-created', perPage: '50' })
-        .then((r) => { props = r.items; render(); })
+        .then((r) => {
+          props = r.items;
+          render();
+          // Si el enlace traía una propiedad, se abre sola. Es lo que convierte
+          // un enlace compartido en algo que lleva a alguna parte en vez de a
+          // la portada.
+          const id = new URLSearchParams(location.search).get('p');
+          if (id && props.some((x) => x.id === id)) abrir(id);
+        })
         .catch(() => { cat.innerHTML = `<p class="cargando">${_('catalog.error')}</p>`; });
+
+      // El número de WhatsApp de la agencia vive en `settings`, no en el
+      // código: es un dato del negocio y cambia sin desplegar. Mientras no
+      // exista, los botones sencillamente no se pintan — un canal que no
+      // contesta es peor que ningún canal.
+      list<{ key: string; value: unknown }>('settings', { filter: 'key="contacto.whatsapp"' })
+        .then((r) => {
+          const bruto = r.items[0]?.value;
+          const num = String(typeof bruto === 'object' && bruto ? (bruto as { numero?: string }).numero ?? '' : bruto ?? '')
+            .replace(/[^\d]/g, '');
+          if (num) montarWhatsApp(num);
+        })
+        .catch(() => {});
+    }
+
+    /** Los dos accesos al canal: uno por tarjeta y una barra fija abajo. */
+    function montarWhatsApp(num: string) {
+      const enlace = (texto: string) =>
+        `https://wa.me/${num}?text=${encodeURIComponent(texto)}`;
+
+      const barra = document.createElement('a');
+      barra.className = 'wa-barra';
+      barra.href = enlace(_('wa.mensajeGeneral'));
+      barra.target = '_blank';
+      barra.rel = 'noreferrer';
+      barra.textContent = _('wa.barra');
+      document.body.appendChild(barra);
+
+      // La ficha abierta también lo ofrece, con el título de la propiedad
+      // dentro del mensaje: quien escribe no tiene que explicar cuál es.
+      ficha.addEventListener('brotea:ficha', ((e: CustomEvent<{ titulo: string }>) => {
+        const previo = fichaBody.querySelector('.wa-ficha');
+        if (previo) previo.remove();
+        const a = document.createElement('a');
+        a.className = 'wa-ficha';
+        a.href = enlace(_('wa.mensajePropiedad', { propiedad: e.detail.titulo }));
+        a.target = '_blank';
+        a.rel = 'noreferrer';
+        a.textContent = _('wa.preguntar');
+        fichaBody.appendChild(a);
+      }) as EventListener);
     }
   </script>
 
@@ -247,6 +322,18 @@ const { locale } = Astro.props;
     .catalogo { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
                 gap: var(--space-5); margin-top: var(--space-6); }
     .cargando { color: var(--muted); max-width: 52ch; }
+    /* El canal, en verde de WhatsApp y no en el color de marca: aquí el color
+       no es identidad, es el nombre del sitio al que lleva. */
+    .wa-barra { position: fixed; inset: auto 0 0 0; z-index: 40; display: block;
+                padding: calc(var(--space-3) + env(safe-area-inset-bottom, 0)) var(--space-4) var(--space-3);
+                background: #075E54; color: #fff; text-align: center; font-weight: 600;
+                text-decoration: none; }
+    .wa-barra:hover { filter: brightness(1.08); }
+    .wa-ficha { display: inline-block; margin-top: var(--space-4); padding: .6rem 1.2rem;
+                border-radius: var(--radius); background: #075E54; color: #fff;
+                font-weight: 600; text-decoration: none; }
+    /* La barra tapa el final de la página: se le hace sitio. */
+    body:has(.wa-barra) main { padding-bottom: var(--space-6); }
     .card { position: relative; background: var(--surface); border: 1px solid var(--border);
             border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden;
             display: flex; flex-direction: column;

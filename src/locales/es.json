@@ -79,5 +79,9 @@
   "privacidad.terceros.texto": "Los datos se guardan en nuestra propia base de datos alojada en la Unión Europea. Esta web usa además analítica sin cookies (Umami, autoalojada) y captura de errores (GlitchTip, autoalojada); ninguna de las dos recibe lo que escribes en el formulario.",
   "privacidad.terceros.titulo": "Quién más los ve",
   "privacidad.titulo": "Política de privacidad",
-  "site.name": "Inmobiliaria"
+  "site.name": "Inmobiliaria",
+  "wa.barra": "💬 Escríbenos por WhatsApp",
+  "wa.mensajeGeneral": "Hola, os escribo desde la web.",
+  "wa.mensajePropiedad": "Hola, me interesa «{propiedad}».",
+  "wa.preguntar": "💬 Preguntar por esta casa"
 }
