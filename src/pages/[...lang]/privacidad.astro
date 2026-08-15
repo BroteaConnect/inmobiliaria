@@ -1,0 +1,28 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { localeOf, localePaths, t, unknownLocale } from '../../lib/i18n';
+import Legal from '../../components/Legal.astro';
+
+export const getStaticPaths = localePaths;
+if (unknownLocale(Astro)) return new Response(null, { status: 404 });
+const locale = localeOf(Astro);
+
+// Lo que esta página dice es verificable en el código de este repo: qué campos
+// pide el formulario (src/pages/[...lang]/index.astro), dónde acaban
+// (PocketBase), y qué terceros carga la página (Umami y GlitchTip, en
+// src/layouts/Layout.astro). Lo que NO se puede saber desde el código —la razón
+// social, el domicilio, el NIF— está marcado como pendiente en los diccionarios
+// en vez de inventado: una política con datos falsos es peor que no tenerla.
+const claves = ['intro', 'quien', 'que', 'para', 'base', 'plazo', 'terceros', 'derechos', 'reclamacion'];
+---
+
+<Layout title={t(locale, 'privacidad.titulo')} locale={locale}>
+  <Legal titulo={t(locale, 'privacidad.titulo')} actualizado={t(locale, 'legal.actualizado')}>
+    {claves.map((k) => (
+      <section>
+        <h2>{t(locale, `privacidad.${k}.titulo`)}</h2>
+        <p set:html={t(locale, `privacidad.${k}.texto`)} />
+      </section>
+    ))}
+  </Legal>
+</Layout>

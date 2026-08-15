@@ -29,6 +29,15 @@ const { locale } = Astro.props;
       <label>{t(locale, 'form.phone')} <input name="telefono" required autocomplete="tel" /></label>
       <label>{t(locale, 'form.email')} <input name="email" type="email" autocomplete="email" /></label>
       <label>{t(locale, 'form.message')} <textarea name="mensaje" rows="3" placeholder={t(locale, 'form.messagePlaceholder')}></textarea></label>
+      {/* Sin marcar no se envía: `required` lo impone el navegador antes de que
+          este formulario haga nada, así que no hay camino por el que un lead
+          entre sin consentimiento. Y lo que se guarda no es solo el "sí": se
+          guarda CUÁNDO y a QUÉ TEXTO, porque una casilla marcada no demuestra
+          nada un año después si nadie sabe qué decía. */}
+      <label class="consent">
+        <input type="checkbox" name="consentimiento" required />
+        <span set:html={t(locale, 'form.consent')} />
+      </label>
       <button type="submit">{t(locale, 'form.submit')}</button>
       <p id="interes-status" role="status"></p>
     </form>
@@ -194,6 +203,10 @@ const { locale } = Astro.props;
         await create('leads', {
           nombre: data.nombre, telefono: data.telefono, email: data.email,
           mensaje: data.mensaje, propiedad: data.propiedad, etapa: 'nuevo', origen: 'web',
+          consentimiento: true,
+          consentimiento_en: new Date().toISOString(),
+          // El texto exacto que se aceptó, sin etiquetas: es la prueba.
+          consentimiento_texto: (_('form.consent') || '').replace(/<[^>]+>/g, '').trim().slice(0, 300),
         });
         // Aviso inmediato al topic del proyecto (chasis: requirements-api → Telegram)
         const p = props.find((x) => x.id === data.propiedad);
