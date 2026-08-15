@@ -77,9 +77,13 @@ const { locale } = Astro.props;
       descripcion: string; fotos: string[];
     }
 
-    // El mercado de la clienta opera en dirhams; Intl decide el formato por
-    // idioma ("1.234.567 AED" en es, "AED 1,234,567" en en).
-    const precio = (n: number) => (n != null && Number.isFinite(n) ? fmtMoney(locale, n, 'AED') : '');
+    // La moneda es un dato del negocio, no una constante del código: una
+    // agencia que vende en dirhams y otra que vende en euros usan el mismo
+    // sitio. Sale de `settings` (negocio.moneda) y AED es lo que había, así
+    // que es lo que queda mientras nadie configure otra cosa. Intl decide el
+    // formato por idioma ("1.234.567 AED" en es, "AED 1,234,567" en en).
+    let moneda = 'AED';
+    const precio = (n: number) => (n != null && Number.isFinite(n) ? fmtMoney(locale, n, moneda) : '');
     const foto = (p: Propiedad, thumb = true) =>
       p.fotos?.length ? fileUrl(p, p.fotos[0]) + (thumb ? '?thumb=600x400' : '') : '';
 
@@ -190,12 +194,14 @@ const { locale } = Astro.props;
       return gal;
     }
 
-    /** Título de la propiedad abierta: lo usa el mensaje de WhatsApp. */
+    /** La propiedad abierta: su título va en el mensaje de WhatsApp. */
     let tituloActual = '';
+    let idActual = '';
 
     function abrir(id: string) {
       const p = props.find((x) => x.id === id)!;
       tituloActual = p.titulo;
+      idActual = p.id;
       const apunte = apunteDe(p);
       const desc = (p.descripcion ?? '').trim();
       // Si la descripción es una sola frase, el apunte ya la muestra entera.
@@ -308,6 +314,20 @@ const { locale } = Astro.props;
           };
           const dato = (k: string) => texto(r.items.find((f) => f.key === k)?.value);
           telefonoNegocio = dato('negocio.telefono');
+          // Un código ISO de tres letras o nada: `Intl` lanza con cualquier
+          // otra cosa y una portada en blanco por un ajuste mal escrito es
+          // peor que un precio en la moneda anterior.
+          const cod = dato('negocio.moneda').toUpperCase();
+          if (/^[A-Z]{3}$/.test(cod) && cod !== moneda) {
+            moneda = cod;
+            // Los ajustes pueden llegar después del catálogo: se repintan los
+            // precios ya escritos. La ficha abierta se repinta por dentro y no
+            // se reabre, que borraría lo que alguien esté escribiendo.
+            if (props.length) render();
+            const abierta = props.find((x) => x.id === idActual);
+            const nodo = fichaBody.querySelector('.precio');
+            if (abierta && nodo) nodo.textContent = precio(abierta.precio);
+          }
           const num = dato('contacto.whatsapp').replace(/[^\d]/g, '');
           if (num) montarWhatsApp(num);
         })
