@@ -57,7 +57,7 @@
     "runtime": "1.0.0"
   },
   "quality": {
-    "version": "1.4.1"
+    "version": "1.5.0"
   },
   "runtime": {
     "port": 80,
