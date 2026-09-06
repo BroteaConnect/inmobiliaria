@@ -35,6 +35,14 @@
           "type": "text"
         },
         {
+          "name": "consentimiento",
+          "type": "bool"
+        },
+        {
+          "name": "consentimiento_en",
+          "type": "date"
+        },
+        {
           "name": "created",
           "type": "autodate",
           "onCreate": true,
@@ -231,6 +239,30 @@
           "max": 300
         },
         {
+          "name": "asignado",
+          "type": "relation",
+          "collection": "users",
+          "maxSelect": 1
+        },
+        {
+          "name": "canal_preferido",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "email",
+            "whatsapp"
+          ]
+        },
+        {
+          "name": "idioma",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "es",
+            "en"
+          ]
+        },
+        {
           "name": "created",
           "type": "autodate",
           "onCreate": true,
@@ -247,6 +279,216 @@
         "list": "signed-in",
         "view": "signed-in",
         "create": "public",
+        "update": "signed-in",
+        "delete": "signed-in"
+      }
+    },
+    {
+      "$comment": "Message templates, one row per `clave` and channel. A template is written once in both app languages and sent through email or WhatsApp; `evento` names the lead lifecycle event that triggers it, `version` is bumped on every edit so `envios.plantilla_version` records what was actually sent. WhatsApp templates must be approved by Twilio before use: `content_sid` is the Content API id and `content_estado` stores Twilio's status verbatim. `clave` uniqueness is not expressible in this format — the CRM reads before it writes.",
+      "name": "plantillas",
+      "fields": [
+        {
+          "name": "clave",
+          "type": "text",
+          "required": true,
+          "max": 80,
+          "pattern": "^[a-z0-9_.]+$"
+        },
+        {
+          "name": "nombre",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "canal",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "email",
+            "whatsapp"
+          ]
+        },
+        {
+          "name": "categoria",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "utility",
+            "marketing"
+          ]
+        },
+        {
+          "name": "asunto_es",
+          "type": "text",
+          "max": 200
+        },
+        {
+          "name": "asunto_en",
+          "type": "text",
+          "max": 200
+        },
+        {
+          "name": "cuerpo_es",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "cuerpo_en",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "variables",
+          "type": "json"
+        },
+        {
+          "name": "evento",
+          "type": "text",
+          "max": 80
+        },
+        {
+          "name": "estado",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "borrador",
+            "aprobada",
+            "retirada"
+          ]
+        },
+        {
+          "name": "version",
+          "type": "number",
+          "min": 1,
+          "onlyInt": true
+        },
+        {
+          "name": "content_sid",
+          "type": "text",
+          "max": 40
+        },
+        {
+          "name": "content_estado",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "unsubmitted",
+            "received",
+            "pending",
+            "approved",
+            "rejected",
+            "paused",
+            "disabled"
+          ]
+        },
+        {
+          "name": "content_motivo",
+          "type": "text"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": false
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": true
+        }
+      ],
+      "access": {
+        "list": "signed-in",
+        "view": "signed-in",
+        "create": "signed-in",
+        "update": "signed-in",
+        "delete": "signed-in"
+      }
+    },
+    {
+      "$comment": "Outbound campaigns: one template sent to a segment of leads in daily batches. `segmento` is a JSON filter ({etapa[], consentimiento, origen[], idioma, canal_preferido, asignado}) evaluated by the jobs runner, `lote_diario` and `intervalo_min` throttle the sends, and `hora_desde`/`hora_hasta` (HH:MM, Europe/Madrid) bound the sending window. `informe` accumulates the delivery counts. Declared before `actividades` so `actividades.campana` resolves on pass 1.",
+      "name": "campanas",
+      "fields": [
+        {
+          "name": "nombre",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "plantilla",
+          "type": "relation",
+          "collection": "plantillas",
+          "maxSelect": 1
+        },
+        {
+          "name": "segmento",
+          "type": "json"
+        },
+        {
+          "name": "lote_diario",
+          "type": "number",
+          "min": 1,
+          "onlyInt": true
+        },
+        {
+          "name": "intervalo_min",
+          "type": "number",
+          "min": 0,
+          "onlyInt": true
+        },
+        {
+          "name": "hora_desde",
+          "type": "text",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        {
+          "name": "hora_hasta",
+          "type": "text",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        {
+          "name": "inicio",
+          "type": "date"
+        },
+        {
+          "name": "estado",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "borrador",
+            "programada",
+            "en_curso",
+            "pausada",
+            "completada",
+            "cancelada"
+          ]
+        },
+        {
+          "name": "ultimo_envio_en",
+          "type": "date"
+        },
+        {
+          "name": "informe",
+          "type": "json"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": false
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": true
+        }
+      ],
+      "access": {
+        "list": "signed-in",
+        "view": "signed-in",
+        "create": "signed-in",
         "update": "signed-in",
         "delete": "signed-in"
       }
@@ -308,6 +550,12 @@
           "type": "text"
         },
         {
+          "name": "campana",
+          "type": "relation",
+          "collection": "campanas",
+          "maxSelect": 1
+        },
+        {
           "name": "created",
           "type": "autodate",
           "onCreate": true,
@@ -326,6 +574,184 @@
         "create": "signed-in",
         "update": "signed-in",
         "delete": "signed-in"
+      }
+    },
+    {
+      "$comment": "Property visits: a lead, a property and the agent who shows it, at a given time. `resultado` tracks the visit from scheduled to done (or not shown, cancelled, rescheduled) so the agenda job and the CRM calendar read one source. No cascadeDelete: a visit outlives the deletion of its lead as evidence of the work done.",
+      "name": "visitas",
+      "fields": [
+        {
+          "name": "lead",
+          "type": "relation",
+          "collection": "leads",
+          "maxSelect": 1
+        },
+        {
+          "name": "propiedad",
+          "type": "relation",
+          "collection": "propiedades",
+          "maxSelect": 1
+        },
+        {
+          "name": "agente",
+          "type": "relation",
+          "collection": "users",
+          "maxSelect": 1
+        },
+        {
+          "name": "cuando",
+          "type": "date",
+          "required": true
+        },
+        {
+          "name": "resultado",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "pendiente",
+            "confirmada",
+            "realizada",
+            "no_show",
+            "cancelada",
+            "reprogramada"
+          ]
+        },
+        {
+          "name": "notas",
+          "type": "text"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": false
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": true
+        }
+      ],
+      "access": {
+        "list": "signed-in",
+        "view": "signed-in",
+        "create": "signed-in",
+        "update": "signed-in",
+        "delete": "signed-in"
+      }
+    },
+    {
+      "$comment": "Delivery ledger: one row per message sent to a lead, by a campaign or by hand, with the template and the exact version used and the provider's message id. `estado` is the same union as `actividades.estado_envio`; the timestamps are filled by the provider webhooks. `delete` is `nobody` on purpose: delivery evidence is not erasable from the browser, only by a superuser. No cascadeDelete: a delivery survives the deletion of its lead.",
+      "name": "envios",
+      "fields": [
+        {
+          "name": "lead",
+          "type": "relation",
+          "collection": "leads",
+          "maxSelect": 1
+        },
+        {
+          "name": "campana",
+          "type": "relation",
+          "collection": "campanas",
+          "maxSelect": 1
+        },
+        {
+          "name": "plantilla",
+          "type": "relation",
+          "collection": "plantillas",
+          "maxSelect": 1
+        },
+        {
+          "name": "plantilla_version",
+          "type": "number"
+        },
+        {
+          "name": "actividad",
+          "type": "relation",
+          "collection": "actividades",
+          "maxSelect": 1
+        },
+        {
+          "name": "canal",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "email",
+            "whatsapp"
+          ]
+        },
+        {
+          "name": "mensaje_id",
+          "type": "text"
+        },
+        {
+          "name": "estado",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "registrado",
+            "enviado",
+            "entregado",
+            "abierto",
+            "click",
+            "error",
+            "simulado"
+          ]
+        },
+        {
+          "name": "variables",
+          "type": "json"
+        },
+        {
+          "name": "enviado_en",
+          "type": "date"
+        },
+        {
+          "name": "entregado_en",
+          "type": "date"
+        },
+        {
+          "name": "abierto_en",
+          "type": "date"
+        },
+        {
+          "name": "click_en",
+          "type": "date"
+        },
+        {
+          "name": "error_en",
+          "type": "date"
+        },
+        {
+          "name": "error_codigo",
+          "type": "text",
+          "max": 40
+        },
+        {
+          "name": "error_texto",
+          "type": "text"
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": false
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "onCreate": true,
+          "onUpdate": true
+        }
+      ],
+      "access": {
+        "list": "signed-in",
+        "view": "signed-in",
+        "create": "signed-in",
+        "update": "signed-in",
+        "delete": "nobody"
       }
     },
     {
