@@ -45,6 +45,9 @@ resumen 20:00 por Telegram) en [docs/jobs.md](jobs.md).
 - `leads`: `create` público (el formulario), el resto con sesión.
 - `propietarios`/`actividades`/`settings`: todo con sesión. `settings` nunca es
   pública: el mapa de módulos de un CRM privado no es información pública.
+- `plantillas`/`campanas`/`visitas`/`envios` (E1, 2026-09-07): every action
+  requires a session, except `envios.delete`, which nobody can do from the
+  browser — see [Data model](#data-model-e1-2026-09-07) below.
 
 ## Cómo se actualiza (usa las skills de .claude/skills/)
 
@@ -114,6 +117,128 @@ message left that never left, and the digest job counts delivery states. The
 counters in `jobs/lib.mjs` only add up `entregado|abierto|click`, so `simulado`
 cannot inflate them. This is the same honesty the WhatsApp and email-open limits
 above are written down for.
+
+## Data model (E1, 2026-09-07)
+
+`pb/schema.json` is the source of truth and is applied from the factory root:
+
+```bash
+node scripts/pb-schema.mjs inmobiliaria pb/schema.json
+```
+
+The apply is additive and idempotent: it never drops a field, and a second run
+prints only `=` lines and ends with `SCHEMA OK`. Collections are declared in
+dependency order — `users → propietarios → propiedades → leads → plantillas →
+campanas → actividades → visitas → envios → settings` — so every relation
+targets a collection that already exists. Every collection carries `created`
+and `updated` autodate fields. `users` is untouched by E1.
+
+Access is declared as intent (`signed-in`, `public`, `nobody`, or a `raw`
+rule) and compiled by `scripts/lib/access.mjs`. Unless stated otherwise below,
+all five actions (`list`, `view`, `create`, `update`, `delete`) are
+`signed-in`.
+
+### Fields added to existing collections
+
+| Collection | Field | Type | Notes |
+|---|---|---|---|
+| `leads` | `asignado` | relation → `users` (max 1) | the agent who owns the lead; empty = unassigned |
+| `leads` | `canal_preferido` | select `email` \| `whatsapp` | the lead's preferred delivery channel |
+| `leads` | `idioma` | select `es` \| `en` | the language the lead is written to in |
+| `propietarios` | `consentimiento` | bool | marketing consent |
+| `propietarios` | `consentimiento_en` | date | when the consent was recorded |
+| `actividades` | `campana` | relation → `campanas` (max 1) | set when a campaign, not a person, generated the activity |
+
+```bash
+curl -X PATCH "$PB/api/collections/leads/records/$ID" \
+  -H "Authorization: $TOKEN" -H "Content-Type: application/json" \
+  -d '{"asignado": "'$USER_ID'", "canal_preferido": "whatsapp", "idioma": "en"}'
+```
+
+### `plantillas` — message templates
+
+One row per `clave` and channel, written in both app languages.
+
+| Field | Type | Notes |
+|---|---|---|
+| `clave` | text, required, max 80, pattern `^[a-z0-9_.]+$` | stable key; uniqueness is enforced by the CRM (read before write), not by the schema |
+| `nombre` | text, required | |
+| `canal` | select `email` \| `whatsapp` | |
+| `categoria` | select `utility` \| `marketing` | |
+| `asunto_es`, `asunto_en` | text, max 200 | subject per language |
+| `cuerpo_es`, `cuerpo_en` | text, required | body per language |
+| `variables` | json | placeholder names the body uses |
+| `evento` | text, max 80 | the lead lifecycle event this template is tied to |
+| `estado` | select `borrador` \| `aprobada` \| `retirada` | lifecycle inside the CRM |
+| `version` | number, int ≥ 1 | recorded in `envios.plantilla_version` at send time |
+| `content_sid` | text, max 40 | Twilio Content API id (WhatsApp) |
+| `content_estado` | select `unsubmitted` \| `received` \| `pending` \| `approved` \| `rejected` \| `paused` \| `disabled` | Twilio's approval status, stored verbatim |
+| `content_motivo` | text | Twilio's rejection reason |
+
+### `campanas` — outbound campaigns
+
+One template sent to a segment of leads.
+
+| Field | Type | Notes |
+|---|---|---|
+| `nombre` | text, required | |
+| `plantilla` | relation → `plantillas` (max 1) | |
+| `segmento` | json | lead filter: `{etapa[], consentimiento, origen[], idioma, canal_preferido, asignado}` |
+| `lote_diario` | number, int ≥ 1 | sends per day |
+| `intervalo_min` | number, int ≥ 0 | minutes between sends |
+| `hora_desde`, `hora_hasta` | text, pattern `HH:MM` (24 h) | sending window |
+| `inicio` | date | |
+| `estado` | select `borrador` \| `programada` \| `en_curso` \| `pausada` \| `completada` \| `cancelada` | |
+| `ultimo_envio_en` | date | |
+| `informe` | json | delivery counts |
+
+### `visitas` — property visits
+
+A lead, a property and the agent who shows it, at a given time.
+
+| Field | Type | Notes |
+|---|---|---|
+| `lead` | relation → `leads` (max 1) | no cascade delete: the visit outlives its lead |
+| `propiedad` | relation → `propiedades` (max 1) | |
+| `agente` | relation → `users` (max 1) | |
+| `cuando` | date, required | |
+| `resultado` | select `pendiente` \| `confirmada` \| `realizada` \| `no_show` \| `cancelada` \| `reprogramada` | |
+| `notas` | text | |
+
+```bash
+curl -X POST "$PB/api/collections/visitas/records" \
+  -H "Authorization: $TOKEN" -H "Content-Type: application/json" \
+  -d '{"lead": "'$LEAD_ID'", "propiedad": "'$PROP_ID'", "agente": "'$USER_ID'",
+       "cuando": "2026-09-12 10:30:00", "resultado": "pendiente"}'
+```
+
+### `envios` — delivery ledger
+
+One row per message sent to a lead, by a campaign or by hand. **`delete` is
+`nobody`**: delivery evidence cannot be erased from the browser, only by a
+superuser. No cascade delete from `leads`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `lead` | relation → `leads` (max 1) | |
+| `campana` | relation → `campanas` (max 1) | empty for manual sends |
+| `plantilla` | relation → `plantillas` (max 1) | |
+| `plantilla_version` | number | the template version actually sent |
+| `actividad` | relation → `actividades` (max 1) | the activity the agent sees |
+| `canal` | select `email` \| `whatsapp` | |
+| `mensaje_id` | text | provider message id |
+| `estado` | select `registrado` \| `enviado` \| `entregado` \| `abierto` \| `click` \| `error` \| `simulado` | same union as `actividades.estado_envio` |
+| `variables` | json | values the placeholders were rendered with |
+| `enviado_en`, `entregado_en`, `abierto_en`, `click_en`, `error_en` | date | one timestamp per state reached |
+| `error_codigo` | text, max 40 | |
+| `error_texto` | text | |
+
+### What exists today
+
+E1 ships the data model only. There is no campaign runner, no lead/property
+matcher and no visit booking in code yet; the rows above are written and read
+by hand (PocketBase admin or API) until the screens and jobs that use them are
+merged.
 
 ## Deuda consciente / siguiente iteración
 
