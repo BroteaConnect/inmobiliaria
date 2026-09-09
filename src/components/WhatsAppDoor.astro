@@ -1,0 +1,59 @@
+---
+// The WhatsApp door. Rendered on the server, hidden, with the message it will
+// carry; the script fills the number in when `contacto.whatsapp` resolves from
+// the business settings and shows it. Rendering never waits for the settings:
+// a door that depends on a fetch is a door that is sometimes not there, and
+// today `settings` is not readable anonymously at all (Design Read, tell 12).
+//
+// `label` and `message` arrive translated: the caller knows its locale and
+// which of the three messages it means.
+interface Props { label: string; message: string; class?: string }
+const { label, message, class: className } = Astro.props;
+---
+
+<a class:list={['wa-door', className]} data-wa-door data-message={message} hidden target="_blank" rel="noreferrer">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 2a9.9 9.9 0 0 0-8.5 15l-1.4 5 5.2-1.4A9.9 9.9 0 1 0 12 2Zm0 18a8 8 0 0 1-4.1-1.1l-.3-.2-3 .8.8-2.9-.2-.3A8 8 0 1 1 12 20Zm4.4-5.9c-.2-.1-1.4-.7-1.6-.8-.2-.1-.4-.1-.5.1l-.7.9c-.1.2-.3.2-.5.1a6.5 6.5 0 0 1-3.2-2.8c-.1-.2 0-.4.1-.5l.4-.5c.1-.2.1-.3 0-.5l-.7-1.6c-.2-.4-.4-.4-.5-.4h-.5a1 1 0 0 0-.7.3A2.9 2.9 0 0 0 7 10a5 5 0 0 0 1.1 2.7 11.4 11.4 0 0 0 4.4 3.9c1.6.6 1.9.5 2.3.5a2.5 2.5 0 0 0 1.6-1.2 2 2 0 0 0 .1-1.1c0-.1-.2-.2-.4-.3Z"/></svg>
+  <span>{label}</span>
+</a>
+
+<script>
+  import { cargarNegocio, whatsappDe } from '../lib/negocio';
+
+  // One bundle for every door on the page: each carries its own message.
+  const doors = document.querySelectorAll<HTMLAnchorElement>('[data-wa-door]');
+  if (doors.length) {
+    cargarNegocio().then((d) => {
+      const num = whatsappDe(d);
+      if (!num) return;
+      doors.forEach((a) => {
+        a.href = `https://wa.me/${num}?text=${encodeURIComponent(a.dataset.message ?? '')}`;
+        a.hidden = false;
+      });
+    });
+  }
+</script>
+
+<style is:global>
+  /* Zero specificity on purpose: a page's variant (the catalogue bar, the
+     after-send link) overrides any of this with a plain class selector. */
+  :where(.wa-door) {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 2.75rem;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius);
+    background: var(--primary);
+    color: var(--primary-contrast);
+    font-weight: 600;
+    text-decoration: none;
+    transition-property: background-color, color, box-shadow;
+    transition-duration: var(--duration-press);
+    transition-timing-function: var(--ease-out);
+  }
+  /* Explicit, because any author `display` rule beats the [hidden] UA rule. */
+  .wa-door[hidden] { display: none; }
+  @media (hover: hover) and (pointer: fine) {
+    :where(.wa-door):hover { background: color-mix(in oklab, var(--primary) 88%, var(--text)); }
+  }
+</style>

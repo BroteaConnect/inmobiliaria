@@ -1,0 +1,204 @@
+---
+// The lead form, the site's first door: a `leads` row with the property
+// attached, the chassis notified, and the after-send screen that says who
+// calls and when. Ported from the catalogue panel unchanged in what it saves:
+// the same fields, the same consent capture (when, and to which words), the
+// same two endpoints.
+import { localePath, t } from '../lib/i18n';
+import WhatsAppDoor from './WhatsAppDoor.astro';
+
+interface Props { locale: string; propiedad: string; titulo: string }
+const { locale, propiedad, titulo } = Astro.props;
+---
+
+<section class="interes" data-lead data-titulo={titulo}>
+  <form id="interes">
+    <h2>{t(locale, 'form.title')}</h2>
+    <input type="hidden" name="propiedad" value={propiedad} />
+    <label>{t(locale, 'form.name')} <input name="nombre" required autocomplete="name" /></label>
+    <label>{t(locale, 'form.phone')} <input name="telefono" type="tel" required autocomplete="tel" /></label>
+    <label>{t(locale, 'form.email')} <input name="email" type="email" autocomplete="email" /></label>
+    <label>{t(locale, 'form.message')} <textarea name="mensaje" rows="3" placeholder={t(locale, 'form.messagePlaceholder')}></textarea></label>
+    <fieldset class="franjas">
+      <legend>{t(locale, 'form.franja')}</legend>
+      <div class="franjas-fila">
+        {['mananas', 'tardes', 'finde'].map((f) => (
+          <label class="franja">
+            <input type="radio" name="franja" value={f} />
+            <span>{t(locale, `form.franja.${f}`)}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+    {/* Sin marcar no se envía: `required` lo impone el navegador antes de que
+        este formulario haga nada, así que no hay camino por el que un lead
+        entre sin consentimiento. Y lo que se guarda no es solo el "sí": se
+        guarda CUÁNDO y a QUÉ TEXTO, porque una casilla marcada no demuestra
+        nada un año después si nadie sabe qué decía. */}
+    <label class="consent">
+      <input type="checkbox" name="consentimiento" required />
+      <span set:html={t(locale, 'form.consent')} />
+    </label>
+    <button type="submit" class="button">{t(locale, 'form.submit')}</button>
+    <p id="interes-status" role="status"></p>
+  </form>
+  <div id="interes-hecho" hidden>
+    <p class="hecho-marca" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+    </p>
+    <h2 id="hecho-titulo" tabindex="-1"></h2>
+    <p id="hecho-sub">{t(locale, 'form.hecho.sub')}</p>
+    <p id="hecho-canal"></p>
+    <WhatsAppDoor class="wa-hecho" label={t(locale, 'wa.adelantar')} message={t(locale, 'wa.mensajePropiedad', { propiedad: titulo })} />
+    <a class="hecho-volver" href={localePath(locale, '/')}>{t(locale, 'form.hecho.volver')}</a>
+  </div>
+</section>
+
+<script>
+  import { create } from '../lib/pb';
+  import { localeFromPath, t } from '../lib/i18n';
+  import { cargarNegocio } from '../lib/negocio';
+
+  const root = document.querySelector<HTMLElement>('[data-lead]');
+  if (root) {
+    // One bundle for every locale: the language comes from the URL.
+    const locale = localeFromPath(location.pathname);
+    const _ = (key: string, vars?: Record<string, string | number>) => t(locale, key, vars);
+    const form = root.querySelector<HTMLFormElement>('form')!;
+    const status = root.querySelector<HTMLElement>('#interes-status')!;
+    const hecho = root.querySelector<HTMLElement>('#interes-hecho')!;
+    const titulo = root.dataset.titulo ?? '';
+
+    /**
+     * La pantalla de después: quién ha quedado en llamar y cuándo, no un
+     * «¡recibido!» que deja al cliente sin saber qué pasa ahora. El nombre es
+     * el que acaba de escribir; el teléfono, el que el titular haya puesto en
+     * Ajustes; y si no hay ninguno configurado, esa línea simplemente no sale
+     * en vez de prometer un número inventado.
+     */
+    const mostrarHecho = async (nombre: string) => {
+      form.hidden = true;
+      hecho.hidden = false;
+      const pila = (nombre || '').trim().split(/\s+/)[0] ?? '';
+      const titulo = hecho.querySelector<HTMLElement>('#hecho-titulo')!;
+      titulo.textContent = pila ? _('form.hecho.titulo', { nombre: pila }) : _('form.hecho.tituloAnonimo');
+      titulo.focus();
+      const telefono = (await cargarNegocio()).telefono ?? '';
+      hecho.querySelector<HTMLElement>('#hecho-canal')!.textContent =
+        telefono ? _('form.hecho.telefono', { telefono }) : '';
+    };
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form)) as Record<string, string>;
+      status.textContent = _('form.sending');
+      try {
+        await create('leads', {
+          nombre: data.nombre, telefono: data.telefono, email: data.email,
+          mensaje: data.mensaje, propiedad: data.propiedad, etapa: 'nuevo', origen: 'web',
+          franja: data.franja || undefined,
+          consentimiento: true,
+          consentimiento_en: new Date().toISOString(),
+          // El texto exacto que se aceptó, sin etiquetas: es la prueba.
+          consentimiento_texto: (_('form.consent') || '').replace(/<[^>]+>/g, '').trim().slice(0, 300),
+        });
+        // Aviso inmediato al topic del proyecto (chasis: requirements-api → Telegram)
+        fetch('https://api.brotea.dev/requirements', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            project: 'inmobiliaria', source: 'lead_web',
+            submitted_by: `${data.nombre} <${data.telefono}>`,
+            content: `LEAD para "${titulo}": ${data.mensaje || '(sin mensaje)'} — ${data.email || 'sin email'}`,
+          }),
+        }).catch(() => {});
+        form.reset();
+        status.textContent = '';
+        mostrarHecho(data.nombre);
+      } catch {
+        status.textContent = _('form.error');
+      }
+    });
+  }
+</script>
+
+<style>
+  .interes {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-5) var(--space-4);
+  }
+  #interes { display: flex; flex-direction: column; gap: var(--space-3); }
+  #interes[hidden] { display: none; }
+  #interes h2, #interes-hecho h2 {
+    font-size: var(--text-title);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+  #interes label { font-weight: 600; font-size: var(--text-data); display: flex; flex-direction: column; gap: var(--space-1); }
+  #interes input, #interes textarea {
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font: inherit;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 44px;
+    transition-property: border-color, box-shadow;
+    transition-duration: var(--duration-press);
+    transition-timing-function: var(--ease-out);
+  }
+  #interes input::placeholder, #interes textarea::placeholder { color: var(--muted); }
+  #interes input:focus-visible, #interes textarea:focus-visible { outline-offset: 1px; border-color: var(--primary); }
+  /* Las tres franjas, como píldoras: el radio real sigue ahí debajo (foco,
+     teclado y lectores de pantalla lo necesitan), solo que no se ve. */
+  .franjas { border: 0; padding: 0; margin: 0; }
+  .franjas legend { padding: 0; font-weight: 600; font-size: var(--text-eyebrow); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .franjas-fila { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+  #interes .franja { flex-direction: row; display: inline-flex; }
+  .franja input { position: absolute; opacity: 0; width: 0; height: 0; min-height: 0; margin: 0; }
+  .franja span {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0 var(--space-4);
+    font-weight: 500;
+    font-size: var(--text-data);
+    cursor: pointer;
+    transition-property: background-color, border-color, color;
+    transition-duration: var(--duration-press);
+    transition-timing-function: var(--ease-out);
+  }
+  .franja:hover span { border-color: var(--primary); }
+  .franja input:checked + span { background: var(--primary); color: var(--primary-contrast); border-color: var(--primary); }
+  .franja input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
+  /* El consentimiento es una fila, no una columna: la casilla y su texto
+     leídos juntos son la frase que se guarda. */
+  #interes .consent { flex-direction: row; align-items: flex-start; gap: var(--space-2); font-weight: 400; line-height: 1.5; }
+  .consent input { min-height: 0; width: 1.15rem; height: 1.15rem; margin-top: 0.15rem; flex: none; accent-color: var(--primary); }
+  #interes .button { align-self: flex-start; }
+  #interes-status { color: var(--ok); min-height: 1.2em; margin: 0; }
+  /* Lo de después del envío. No es un aviso al pie del formulario: ocupa su
+     sitio, porque a partir de ahí lo único que queda por decir es quién
+     llama y cuándo. */
+  #interes-hecho { display: flex; flex-direction: column; gap: var(--space-3); align-items: flex-start; }
+  #interes-hecho[hidden] { display: none; }
+  .hecho-marca {
+    width: 3.25rem;
+    height: 3.25rem;
+    border-radius: 50%;
+    background: var(--ok);
+    color: var(--bg);
+    display: grid;
+    place-items: center;
+    margin: 0;
+  }
+  #interes-hecho h2 { font-size: var(--text-display-lg); font-weight: 700; letter-spacing: -0.02em; }
+  #interes-hecho p { margin: 0; }
+  #hecho-canal:empty { display: none; }
+  #hecho-sub { color: var(--muted); }
+  .hecho-volver { display: inline-flex; align-items: center; min-height: 44px; font-weight: 600; color: var(--primary); }
+</style>

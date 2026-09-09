@@ -25,6 +25,43 @@ function safeParse(s: string): unknown {
   try { return JSON.parse(s); } catch { return null; }
 }
 
+/** The settings the site reads, keyed by the part after the dot. */
+export type Negocio = Record<string, string>;
+
+let cache: Promise<Negocio> | null = null;
+
+/**
+ * The business settings, fetched once per page no matter how many scripts ask
+ * (the footer, the WhatsApp doors and the price formatter all do). `negocio.*`
+ * rows and `contacto.whatsapp` arrive keyed by their last segment
+ * (`telefono`, `moneda`, `whatsapp`...).
+ *
+ * Never rejects: a `settings` collection that is unreadable or empty is an
+ * empty map, and every caller already knows what to show when a value is
+ * missing. A page must render its doors without this data, not wait for it.
+ */
+export function cargarNegocio(): Promise<Negocio> {
+  cache ??= list<Fila>('settings', { perPage: '50' })
+    .then((r) => Object.fromEntries(r.items
+      .filter((f) => f.key?.startsWith('negocio.') || f.key === 'contacto.whatsapp')
+      .map((f) => [f.key.split('.')[1], texto(f.value)])))
+    .catch(() => ({}));
+  return cache;
+}
+
+/** The WhatsApp number as wa.me wants it: digits only, or nothing. */
+export const whatsappDe = (d: Negocio): string => (d.whatsapp ?? '').replace(/[^\d]/g, '');
+
+/**
+ * The currency code, or nothing. Three letters or it is ignored: `Intl` throws
+ * on anything else, and a blank page over a mistyped setting is worse than a
+ * price in the previous currency.
+ */
+export function monedaDe(d: Negocio): string {
+  const cod = (d.moneda ?? '').toUpperCase();
+  return /^[A-Z]{3}$/.test(cod) ? cod : '';
+}
+
 /**
  * Rellena cada `<span data-negocio="...">` de la página.
  *
@@ -34,15 +71,7 @@ function safeParse(s: string): unknown {
 export async function pintarNegocio(pendiente: string): Promise<void> {
   const huecos = [...document.querySelectorAll<HTMLElement>('[data-negocio]')];
   if (!huecos.length) return;
-  let datos: Record<string, string> = {};
-  try {
-    const r = await list<Fila>('settings', { perPage: '50' });
-    datos = Object.fromEntries(r.items
-      .filter((f) => f.key?.startsWith('negocio.') || f.key === 'contacto.whatsapp')
-      .map((f) => [f.key.split('.')[1], texto(f.value)]));
-  } catch {
-    // Sin base de datos se queda lo que ya hay en la página: el marcador.
-  }
+  const datos = await cargarNegocio();
   for (const hueco of huecos) {
     const clave = hueco.dataset.negocio ?? '';
     const valor = datos[clave] ?? '';

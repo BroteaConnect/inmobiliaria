@@ -1,0 +1,172 @@
+---
+// The property gallery. The first photo is server-rendered so a phone on 3G
+// and a crawler both get the picture without JavaScript; the script then adds
+// what needs a hand: the thumbnail strip (`?thumb=600x400`), the two arrows
+// (44px, wrap-around) and the announcements (`aria-current` on the active
+// thumbnail, `aria-live` on the frame). Ported from the catalogue panel, where
+// it was DOM-built for the same reason it still is: `titulo` is agent input and
+// never touches innerHTML.
+import { t } from '../lib/i18n';
+import { fotoUrl, fotos, type Propiedad } from '../lib/propiedad';
+
+interface Props { locale: string; p: Propiedad }
+const { locale, p } = Astro.props;
+const urls = fotos(p).map((_, i) => fotoUrl(p, i));
+const total = urls.length;
+---
+
+{total > 0 && (
+  <div class="galeria" data-galeria data-urls={JSON.stringify(urls)} data-titulo={p.titulo}>
+    <div class="galeria-marco" aria-live="polite">
+      <img
+        class="galeria-principal"
+        src={urls[0]}
+        alt={t(locale, 'gallery.photoAlt', { title: p.titulo, n: 1, total })}
+        width="1200"
+        height="800"
+        fetchpriority="high"
+        decoding="async"
+      />
+    </div>
+  </div>
+)}
+
+<script>
+  import { localeFromPath, t } from '../lib/i18n';
+
+  const gal = document.querySelector<HTMLElement>('[data-galeria]');
+  const marco = gal?.querySelector<HTMLElement>('.galeria-marco');
+  const principal = gal?.querySelector<HTMLImageElement>('.galeria-principal');
+  const urls: string[] = gal ? JSON.parse(gal.dataset.urls ?? '[]') : [];
+  const total = urls.length;
+
+  if (gal && marco && principal && total > 1) {
+    const locale = localeFromPath(location.pathname);
+    const _ = (key: string, vars?: Record<string, string | number>) => t(locale, key, vars);
+    const titulo = gal.dataset.titulo ?? '';
+    let actual = 0;
+    const minis: HTMLButtonElement[] = [];
+
+    const ir = (i: number) => {
+      actual = (i + total) % total;
+      principal.src = urls[actual];
+      principal.alt = _('gallery.photoAlt', { title: titulo, n: actual + 1, total });
+      minis.forEach((m, j) => {
+        m.classList.toggle('activa', j === actual);
+        if (j === actual) m.setAttribute('aria-current', 'true');
+        else m.removeAttribute('aria-current');
+      });
+      minis[actual].scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    };
+
+    const tira = document.createElement('div');
+    tira.className = 'galeria-tira';
+    urls.forEach((u, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'galeria-mini' + (i === 0 ? ' activa' : '');
+      if (i === 0) b.setAttribute('aria-current', 'true');
+      b.setAttribute('aria-label', _('gallery.thumb', { n: i + 1, total }));
+      const img = document.createElement('img');
+      img.src = `${u}?thumb=600x400`;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.width = 72;
+      img.height = 54;
+      b.append(img);
+      b.addEventListener('click', () => ir(i));
+      tira.append(b);
+      minis.push(b);
+    });
+
+    // Chevrons as inline SVG in currentColor: the site's own iconography rule.
+    const chevron = (delta: number) => {
+      const ns = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('width', '24');
+      svg.setAttribute('height', '24');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', '2');
+      svg.setAttribute('stroke-linecap', 'round');
+      svg.setAttribute('stroke-linejoin', 'round');
+      svg.setAttribute('aria-hidden', 'true');
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('d', delta < 0 ? 'M15 5l-7 7 7 7' : 'M9 5l7 7-7 7');
+      svg.append(path);
+      return svg;
+    };
+    const flecha = (clase: string, etiqueta: string, delta: number) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `galeria-flecha ${clase}`;
+      b.setAttribute('aria-label', etiqueta);
+      b.append(chevron(delta));
+      b.addEventListener('click', () => ir(actual + delta));
+      return b;
+    };
+    marco.append(flecha('anterior', _('gallery.prev'), -1), flecha('siguiente', _('gallery.next'), 1));
+    gal.append(tira);
+  }
+</script>
+
+<style is:global>
+  /* The strip and the arrows are created at runtime: global on purpose,
+     Astro's scoped styles never match nodes the script makes. */
+  /* min-width: 0, or the strip's eight thumbnails become the column's
+     minimum width and the whole column overflows under whatever sits beside it. */
+  .galeria { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+  .galeria-marco { position: relative; }
+  .galeria-principal {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 3 / 2;
+    object-fit: cover;
+    border-radius: var(--radius-lg);
+    background: var(--bg);
+    display: block;
+  }
+  /* Overlay chrome: the site's ink over the photo, the site's surface as the
+     glyph, so it reads in both colour modes without a colour of its own. */
+  .galeria-flecha {
+    position: absolute;
+    top: 50%;
+    translate: 0 -50%;
+    min-width: 44px;
+    min-height: 44px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--text) 60%, transparent);
+    color: var(--surface);
+    cursor: pointer;
+  }
+  .galeria-flecha:hover { background: color-mix(in srgb, var(--text) 80%, transparent); }
+  .galeria-flecha.anterior { left: var(--space-2); }
+  .galeria-flecha.siguiente { right: var(--space-2); }
+  .galeria-tira {
+    display: flex;
+    gap: var(--space-2);
+    overflow-x: auto;
+    padding-bottom: var(--space-1);
+    scroll-snap-type: x proximity;
+  }
+  .galeria-mini {
+    flex: 0 0 auto;
+    width: 72px;
+    height: 54px;
+    min-height: 44px;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--bg);
+    cursor: pointer;
+    scroll-snap-align: start;
+  }
+  .galeria-mini.activa { border-color: var(--primary); }
+  .galeria-mini img { width: 100%; height: 100%; object-fit: cover; display: block; }
+</style>

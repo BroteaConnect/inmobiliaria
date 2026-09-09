@@ -1,0 +1,184 @@
+---
+// One property, one address: /propiedad/<id> and /en/propiedad/<id>.
+//
+// Rendered per request, not at build time: the CRM publishes listings every
+// day and a route baked into the image would 404 each new one until somebody
+// redeployed. Everything a preview or a crawler needs is in the HTML itself,
+// because neither of them runs JavaScript.
+import Layout from '../../../layouts/Layout.astro';
+import Gallery from '../../../components/Gallery.astro';
+import LeadForm from '../../../components/LeadForm.astro';
+import WhatsAppDoor from '../../../components/WhatsAppDoor.astro';
+import { LOCALES, intlOf, localeOf, localePath, t, unknownLocale } from '../../../lib/i18n';
+import {
+  DEFAULT_CURRENCY, apunteDe, descripcionEsApunte, fotoUrl, fotos, metaDe, parrafosDe,
+  precioDe, precioReal, resumenDe,
+} from '../../../lib/propiedad';
+import { propiedadPublicada } from '../../../lib/propiedad.server';
+
+export const prerender = false;
+
+// `[...lang]` answers any prefix on a server route: a language that does not
+// exist, or a deeper path nobody wrote, is a 404 and not a Spanish page at a
+// made-up address.
+if (unknownLocale(Astro)) return new Response(null, { status: 404 });
+const locale = localeOf(Astro);
+const id = String(Astro.params.id ?? '');
+const consulta = await propiedadPublicada(id);
+const p = typeof consulta === 'string' ? null : consulta;
+
+// A draft, a reserved, a sold or an unknown id is a 404 with a page a person
+// can use; a database that did not answer is a 503, so nobody caches "gone"
+// for a listing that is merely unreachable.
+if (!p) Astro.response.status = consulta === 'error' ? 503 : 404;
+Astro.response.headers.set('Cache-Control', p ? 'public, max-age=60, stale-while-revalidate=300' : 'no-store');
+
+const abs = (href: string) => (Astro.site ? new URL(href, Astro.site).href : href);
+const ogLocale = (l: string) => intlOf(l).replace('-', '_');
+const path = `/propiedad/${id}`;
+const url = abs(localePath(locale, path));
+const titulo = (p?.titulo ?? '').trim();
+const resumen = p ? resumenDe(p) || t(locale, 'page.description') : '';
+const imagenes = p ? fotos(p).map((_, i) => fotoUrl(p, i)) : [];
+const imagen = imagenes[0] || abs('/og-fallback.png');
+const precio = p ? precioReal(p) : 0;
+const meta = p ? metaDe(locale, p) : '';
+const apunte = p ? apunteDe(p) : '';
+const parrafos = p && !descripcionEsApunte(p) ? parrafosDe(p) : [];
+// PocketBase writes "2026-07-30 16:44:15.676Z", which V8 will not parse;
+// schema.org reads ISO 8601, so the space becomes the T it stands for.
+const creado = Date.parse((p?.created ?? '').replace(' ', 'T'));
+const publicado = Number.isNaN(creado) ? '' : new Date(creado).toISOString();
+
+const ld = p && {
+  '@context': 'https://schema.org',
+  '@type': 'RealEstateListing',
+  name: titulo,
+  description: resumen,
+  url,
+  image: imagenes.length ? imagenes : [imagen],
+  inLanguage: intlOf(locale),
+  ...(publicado ? { datePosted: publicado } : {}),
+  ...(precio ? { offers: { '@type': 'Offer', price: precio, priceCurrency: DEFAULT_CURRENCY, url } } : {}),
+  ...(p.municipio ? { address: { '@type': 'PostalAddress', addressLocality: p.municipio } } : {}),
+  ...(p.habitaciones && p.habitaciones > 0 ? { numberOfRooms: p.habitaciones } : {}),
+  ...(p.superficie && p.superficie > 0
+    ? { floorSize: { '@type': 'QuantitativeValue', value: p.superficie, unitCode: 'MTK' } }
+    : {}),
+};
+// `<` escaped so agent input can never close the script element.
+const ldJson = ld ? JSON.stringify(ld).replace(/</g, '\\u003c') : '';
+---
+
+{p ? (
+  <Layout locale={locale} title={titulo} description={resumen} back>
+    <Fragment slot="head">
+      <meta property="og:type" content="website" />
+      <meta property="og:site_name" content={t(locale, 'site.name')} />
+      <meta property="og:title" content={titulo} />
+      <meta property="og:description" content={resumen} />
+      <meta property="og:image" content={imagen} />
+      <meta property="og:url" content={url} />
+      <meta property="og:locale" content={ogLocale(locale)} />
+      {LOCALES.filter((l) => l !== locale).map((l) => (
+        <meta property="og:locale:alternate" content={ogLocale(l)} />
+      ))}
+      <meta name="twitter:card" content="summary_large_image" />
+      <script type="application/ld+json" set:html={ldJson} />
+    </Fragment>
+
+    <article class="ficha" data-propiedad={id}>
+      <a class="volver" href={localePath(locale, '/')}>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 5l-7 7 7 7"/></svg>
+        <span>{t(locale, 'nav.catalog')}</span>
+      </a>
+
+      <div class="ficha-cuerpo">
+        <Gallery locale={locale} p={p} />
+
+        <header class="ficha-cabecera">
+          {p.municipio && <p class="eyebrow">{p.municipio}</p>}
+          <h1>{titulo}</h1>
+          {apunte && <p class="apunte">{apunte}</p>}
+          {meta && <p class="meta data">{meta}</p>}
+          <p class="precio data" data-precio={precio || undefined}>{precioDe(locale, p)}</p>
+        </header>
+
+        {parrafos.length > 0 && (
+          <div class="descripcion">
+            {parrafos.map((s) => <p>{s}</p>)}
+          </div>
+        )}
+      </div>
+
+      <aside class="puertas" aria-label={t(locale, 'form.title')}>
+        <LeadForm locale={locale} propiedad={id} titulo={titulo} />
+        <WhatsAppDoor class="wa-ficha" label={t(locale, 'wa.preguntar')} message={t(locale, 'wa.mensajePropiedad', { propiedad: titulo })} />
+      </aside>
+    </article>
+  </Layout>
+) : (
+  <Layout locale={locale} title={t(locale, 'prop.notFound.title')} back>
+    <section class="ausente">
+      <h1>{t(locale, 'prop.notFound.title')}</h1>
+      <p>{t(locale, consulta === 'error' ? 'prop.error.text' : 'prop.notFound.text')}</p>
+      <a class="button" href={localePath(locale, '/')}>{t(locale, 'nav.catalog')}</a>
+    </section>
+  </Layout>
+)}
+
+<script>
+  import { fmtMoney, localeFromPath } from '../../../lib/i18n';
+  import { cargarNegocio, monedaDe } from '../../../lib/negocio';
+
+  // The price was written in the default currency on the server; if the
+  // owner set another one in the CRM it is rewritten here, once, in place.
+  const precio = document.querySelector<HTMLElement>('.ficha .precio[data-precio]');
+  if (precio) {
+    cargarNegocio().then((d) => {
+      const moneda = monedaDe(d);
+      const n = Number(precio.dataset.precio);
+      if (moneda && n > 0) precio.textContent = fmtMoney(localeFromPath(location.pathname), n, moneda);
+    });
+  }
+</script>
+
+<style>
+  .ficha { display: grid; gap: var(--space-5); }
+  .volver {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 44px;
+    font-weight: 600;
+    text-decoration: none;
+    color: var(--primary);
+    justify-self: start;
+  }
+  .volver:hover span { text-decoration: underline; text-underline-offset: 3px; }
+  .ficha-cuerpo { display: grid; gap: var(--space-5); min-width: 0; }
+  .ficha-cuerpo > :global(*) { min-width: 0; }
+  .ficha-cabecera { display: grid; gap: var(--space-2); }
+  .ficha-cabecera h1 {
+    font-size: var(--text-display-lg);
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+    margin: 0;
+  }
+  .ficha-cabecera .apunte { margin: var(--space-2) 0; }
+  .meta { color: var(--muted); font-size: var(--text-data); font-weight: 500; letter-spacing: 0.01em; margin: 0; }
+  /* Latón solo en datos: el precio es numeral, nunca fondo ni botón. */
+  .precio { font-family: var(--font-sans); font-weight: 700; font-size: var(--text-data-lg); margin: 0; color: var(--accent); }
+  .descripcion { max-width: 62ch; }
+  .descripcion p { line-height: 1.6; margin: 0 0 var(--space-3); }
+  .puertas { display: grid; gap: var(--space-4); align-content: start; }
+  /* The secondary door sits beside the form, on the primary colour with the
+     glyph carrying the recognition; it is present only when a number is. */
+  .puertas :global(.wa-ficha) { justify-self: start; }
+  /* One column at every width: the site's container is a 680px notebook
+     page, and two columns inside it would give the home 328px. */
+  .ausente { max-width: 52ch; display: grid; gap: var(--space-3); justify-items: start; padding: var(--space-6) 0; }
+  .ausente h1 { font-size: var(--text-display-lg); margin: 0; }
+  .ausente p { color: var(--muted); margin: 0; }
+</style>
