@@ -56,7 +56,7 @@ const total = urls.length;
         if (j === actual) m.setAttribute('aria-current', 'true');
         else m.removeAttribute('aria-current');
       });
-      minis[actual].scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+      minis[actual].scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     };
 
     const tira = document.createElement('div');
