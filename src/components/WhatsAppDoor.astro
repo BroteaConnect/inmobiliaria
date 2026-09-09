@@ -17,13 +17,13 @@ const { label, message, class: className } = Astro.props;
 </a>
 
 <script>
-  import { cargarNegocio, whatsappDe } from '../lib/negocio';
+  import { loadBusiness, whatsappOf } from '../lib/negocio';
 
   // One bundle for every door on the page: each carries its own message.
   const doors = document.querySelectorAll<HTMLAnchorElement>('[data-wa-door]');
   if (doors.length) {
-    cargarNegocio().then((d) => {
-      const num = whatsappDe(d);
+    loadBusiness().then((d) => {
+      const num = whatsappOf(d);
       if (!num) return;
       doors.forEach((a) => {
         a.href = `https://wa.me/${num}?text=${encodeURIComponent(a.dataset.message ?? '')}`;

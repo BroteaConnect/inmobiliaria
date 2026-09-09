@@ -7,14 +7,14 @@
 import { localePath, t } from '../lib/i18n';
 import WhatsAppDoor from './WhatsAppDoor.astro';
 
-interface Props { locale: string; propiedad: string; titulo: string }
-const { locale, propiedad, titulo } = Astro.props;
+interface Props { locale: string; propertyId: string; title: string }
+const { locale, propertyId, title } = Astro.props;
 ---
 
-<section class="interes" data-lead data-titulo={titulo}>
+<section class="interes" data-lead data-title={title}>
   <form id="interes">
     <h2>{t(locale, 'form.title')}</h2>
-    <input type="hidden" name="propiedad" value={propiedad} />
+    <input type="hidden" name="propiedad" value={propertyId} />
     <label>{t(locale, 'form.name')} <input name="nombre" required autocomplete="name" /></label>
     <label>{t(locale, 'form.phone')} <input name="telefono" type="tel" required autocomplete="tel" /></label>
     <label>{t(locale, 'form.email')} <input name="email" type="email" autocomplete="email" /></label>
@@ -49,7 +49,7 @@ const { locale, propiedad, titulo } = Astro.props;
     <h2 id="hecho-titulo" tabindex="-1"></h2>
     <p id="hecho-sub">{t(locale, 'form.hecho.sub')}</p>
     <p id="hecho-canal"></p>
-    <WhatsAppDoor class="wa-hecho" label={t(locale, 'wa.adelantar')} message={t(locale, 'wa.mensajePropiedad', { propiedad: titulo })} />
+    <WhatsAppDoor class="wa-hecho" label={t(locale, 'wa.adelantar')} message={t(locale, 'wa.mensajePropiedad', { propiedad: title })} />
     <a class="hecho-volver" href={localePath(locale, '/')}>{t(locale, 'form.hecho.volver')}</a>
   </div>
 </section>
@@ -57,7 +57,7 @@ const { locale, propiedad, titulo } = Astro.props;
 <script>
   import { create } from '../lib/pb';
   import { localeFromPath, t } from '../lib/i18n';
-  import { cargarNegocio } from '../lib/negocio';
+  import { loadBusiness } from '../lib/negocio';
 
   const root = document.querySelector<HTMLElement>('[data-lead]');
   if (root) {
@@ -67,7 +67,7 @@ const { locale, propiedad, titulo } = Astro.props;
     const form = root.querySelector<HTMLFormElement>('form')!;
     const status = root.querySelector<HTMLElement>('#interes-status')!;
     const hecho = root.querySelector<HTMLElement>('#interes-hecho')!;
-    const titulo = root.dataset.titulo ?? '';
+    const title = root.dataset.title ?? '';
 
     /**
      * La pantalla de después: quién ha quedado en llamar y cuándo, no un
@@ -80,10 +80,10 @@ const { locale, propiedad, titulo } = Astro.props;
       form.hidden = true;
       hecho.hidden = false;
       const pila = (nombre || '').trim().split(/\s+/)[0] ?? '';
-      const titulo = hecho.querySelector<HTMLElement>('#hecho-titulo')!;
-      titulo.textContent = pila ? _('form.hecho.titulo', { nombre: pila }) : _('form.hecho.tituloAnonimo');
-      titulo.focus();
-      const telefono = (await cargarNegocio()).telefono ?? '';
+      const heading = hecho.querySelector<HTMLElement>('#hecho-titulo')!;
+      heading.textContent = pila ? _('form.hecho.titulo', { nombre: pila }) : _('form.hecho.tituloAnonimo');
+      heading.focus();
+      const telefono = (await loadBusiness()).telefono ?? '';
       hecho.querySelector<HTMLElement>('#hecho-canal')!.textContent =
         telefono ? _('form.hecho.telefono', { telefono }) : '';
     };
@@ -108,7 +108,7 @@ const { locale, propiedad, titulo } = Astro.props;
           body: JSON.stringify({
             project: 'inmobiliaria', source: 'lead_web',
             submitted_by: `${data.nombre} <${data.telefono}>`,
-            content: `LEAD para "${titulo}": ${data.mensaje || '(sin mensaje)'} — ${data.email || 'sin email'}`,
+            content: `LEAD para "${title}": ${data.mensaje || '(sin mensaje)'} — ${data.email || 'sin email'}`,
           }),
         }).catch(() => {});
         form.reset();

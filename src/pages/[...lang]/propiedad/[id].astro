@@ -9,57 +9,59 @@ import Layout from '../../../layouts/Layout.astro';
 import Gallery from '../../../components/Gallery.astro';
 import LeadForm from '../../../components/LeadForm.astro';
 import WhatsAppDoor from '../../../components/WhatsAppDoor.astro';
-import { LOCALES, intlOf, localeOf, localePath, t, unknownLocale } from '../../../lib/i18n';
+import { DEFAULT_LOCALE, LOCALES, intlOf, localeOf, localePath, t, unknownLocale } from '../../../lib/i18n';
 import {
-  DEFAULT_CURRENCY, apunteDe, descripcionEsApunte, fotoUrl, fotos, metaDe, parrafosDe,
-  precioDe, precioReal, resumenDe,
-} from '../../../lib/propiedad';
-import { propiedadPublicada } from '../../../lib/propiedad.server';
+  DEFAULT_CURRENCY, noteOf, descriptionIsNote, photoUrl, photos, metaOf, paragraphsOf,
+  priceOf, realPrice, summaryOf,
+} from '../../../lib/property';
+import { publishedProperty } from '../../../lib/property.server';
 
 export const prerender = false;
 
 // `[...lang]` answers any prefix on a server route: a language that does not
 // exist, or a deeper path nobody wrote, is a 404 and not a Spanish page at a
-// made-up address.
-if (unknownLocale(Astro)) return new Response(null, { status: 404 });
-const locale = localeOf(Astro);
+// made-up address. Rendered inline with the status set, never as an empty
+// Response: Astro reroutes a bodiless 404 by fetching /404.html from the
+// request's own origin, which a container cannot always reach.
+const badLocale = unknownLocale(Astro);
+const locale = badLocale ? DEFAULT_LOCALE : localeOf(Astro);
 const id = String(Astro.params.id ?? '');
-const consulta = await propiedadPublicada(id);
-const p = typeof consulta === 'string' ? null : consulta;
+const lookup = badLocale ? 'missing' : await publishedProperty(id);
+const p = typeof lookup === 'string' ? null : lookup;
 
 // A draft, a reserved, a sold or an unknown id is a 404 with a page a person
 // can use; a database that did not answer is a 503, so nobody caches "gone"
 // for a listing that is merely unreachable.
-if (!p) Astro.response.status = consulta === 'error' ? 503 : 404;
+if (!p) Astro.response.status = lookup === 'error' ? 503 : 404;
 Astro.response.headers.set('Cache-Control', p ? 'public, max-age=60, stale-while-revalidate=300' : 'no-store');
 
 const abs = (href: string) => (Astro.site ? new URL(href, Astro.site).href : href);
 const ogLocale = (l: string) => intlOf(l).replace('-', '_');
 const path = `/propiedad/${id}`;
 const url = abs(localePath(locale, path));
-const titulo = (p?.titulo ?? '').trim();
-const resumen = p ? resumenDe(p) || t(locale, 'page.description') : '';
-const imagenes = p ? fotos(p).map((_, i) => fotoUrl(p, i)) : [];
-const imagen = imagenes[0] || abs('/og-fallback.png');
-const precio = p ? precioReal(p) : 0;
-const meta = p ? metaDe(locale, p) : '';
-const apunte = p ? apunteDe(p) : '';
-const parrafos = p && !descripcionEsApunte(p) ? parrafosDe(p) : [];
+const title = (p?.titulo ?? '').trim();
+const summary = p ? summaryOf(p) || t(locale, 'page.description') : '';
+const images = p ? photos(p).map((_, i) => photoUrl(p, i)) : [];
+const image = images[0] || abs('/og-fallback.png');
+const price = p ? realPrice(p) : 0;
+const meta = p ? metaOf(locale, p) : '';
+const note = p ? noteOf(p) : '';
+const paragraphs = p && !descriptionIsNote(p) ? paragraphsOf(p) : [];
 // PocketBase writes "2026-07-30 16:44:15.676Z", which V8 will not parse;
 // schema.org reads ISO 8601, so the space becomes the T it stands for.
-const creado = Date.parse((p?.created ?? '').replace(' ', 'T'));
-const publicado = Number.isNaN(creado) ? '' : new Date(creado).toISOString();
+const createdAt = Date.parse((p?.created ?? '').replace(' ', 'T'));
+const datePosted = Number.isNaN(createdAt) ? '' : new Date(createdAt).toISOString();
 
 const ld = p && {
   '@context': 'https://schema.org',
   '@type': 'RealEstateListing',
-  name: titulo,
-  description: resumen,
+  name: title,
+  description: summary,
   url,
-  image: imagenes.length ? imagenes : [imagen],
+  image: images.length ? images : [image],
   inLanguage: intlOf(locale),
-  ...(publicado ? { datePosted: publicado } : {}),
-  ...(precio ? { offers: { '@type': 'Offer', price: precio, priceCurrency: DEFAULT_CURRENCY, url } } : {}),
+  ...(datePosted ? { datePosted: datePosted } : {}),
+  ...(price ? { offers: { '@type': 'Offer', price: price, priceCurrency: DEFAULT_CURRENCY, url } } : {}),
   ...(p.municipio ? { address: { '@type': 'PostalAddress', addressLocality: p.municipio } } : {}),
   ...(p.habitaciones && p.habitaciones > 0 ? { numberOfRooms: p.habitaciones } : {}),
   ...(p.superficie && p.superficie > 0
@@ -71,13 +73,13 @@ const ldJson = ld ? JSON.stringify(ld).replace(/</g, '\\u003c') : '';
 ---
 
 {p ? (
-  <Layout locale={locale} title={titulo} description={resumen} back>
+  <Layout locale={locale} title={title} description={summary} back>
     <Fragment slot="head">
       <meta property="og:type" content="website" />
       <meta property="og:site_name" content={t(locale, 'site.name')} />
-      <meta property="og:title" content={titulo} />
-      <meta property="og:description" content={resumen} />
-      <meta property="og:image" content={imagen} />
+      <meta property="og:title" content={title} />
+      <meta property="og:description" content={summary} />
+      <meta property="og:image" content={image} />
       <meta property="og:url" content={url} />
       <meta property="og:locale" content={ogLocale(locale)} />
       {LOCALES.filter((l) => l !== locale).map((l) => (
@@ -98,30 +100,30 @@ const ldJson = ld ? JSON.stringify(ld).replace(/</g, '\\u003c') : '';
 
         <header class="ficha-cabecera">
           {p.municipio && <p class="eyebrow">{p.municipio}</p>}
-          <h1>{titulo}</h1>
-          {apunte && <p class="apunte">{apunte}</p>}
+          <h1>{title}</h1>
+          {note && <p class="apunte">{note}</p>}
           {meta && <p class="meta data">{meta}</p>}
-          <p class="precio data" data-precio={precio || undefined}>{precioDe(locale, p)}</p>
+          <p class="precio data" data-precio={price || undefined}>{priceOf(locale, p)}</p>
         </header>
 
-        {parrafos.length > 0 && (
+        {paragraphs.length > 0 && (
           <div class="descripcion">
-            {parrafos.map((s) => <p>{s}</p>)}
+            {paragraphs.map((s) => <p>{s}</p>)}
           </div>
         )}
       </div>
 
       <aside class="puertas" aria-label={t(locale, 'form.title')}>
-        <LeadForm locale={locale} propiedad={id} titulo={titulo} />
-        <WhatsAppDoor class="wa-ficha" label={t(locale, 'wa.preguntar')} message={t(locale, 'wa.mensajePropiedad', { propiedad: titulo })} />
+        <LeadForm locale={locale} propertyId={id} title={title} />
+        <WhatsAppDoor class="wa-ficha" label={t(locale, 'wa.preguntar')} message={t(locale, 'wa.mensajePropiedad', { propiedad: title })} />
       </aside>
     </article>
   </Layout>
 ) : (
   <Layout locale={locale} title={t(locale, 'prop.notFound.title')} back>
-    <section class="ausente">
+    <section class="missing">
       <h1>{t(locale, 'prop.notFound.title')}</h1>
-      <p>{t(locale, consulta === 'error' ? 'prop.error.text' : 'prop.notFound.text')}</p>
+      <p>{t(locale, lookup === 'error' ? 'prop.error.text' : 'prop.notFound.text')}</p>
       <a class="button" href={localePath(locale, '/')}>{t(locale, 'nav.catalog')}</a>
     </section>
   </Layout>
@@ -129,16 +131,16 @@ const ldJson = ld ? JSON.stringify(ld).replace(/</g, '\\u003c') : '';
 
 <script>
   import { fmtMoney, localeFromPath } from '../../../lib/i18n';
-  import { cargarNegocio, monedaDe } from '../../../lib/negocio';
+  import { loadBusiness, currencyOf } from '../../../lib/negocio';
 
   // The price was written in the default currency on the server; if the
   // owner set another one in the CRM it is rewritten here, once, in place.
-  const precio = document.querySelector<HTMLElement>('.ficha .precio[data-precio]');
-  if (precio) {
-    cargarNegocio().then((d) => {
-      const moneda = monedaDe(d);
-      const n = Number(precio.dataset.precio);
-      if (moneda && n > 0) precio.textContent = fmtMoney(localeFromPath(location.pathname), n, moneda);
+  const price = document.querySelector<HTMLElement>('.ficha .precio[data-precio]');
+  if (price) {
+    loadBusiness().then((d) => {
+      const moneda = currencyOf(d);
+      const n = Number(price.dataset.precio);
+      if (moneda && n > 0) price.textContent = fmtMoney(localeFromPath(location.pathname), n, moneda);
     });
   }
 </script>
@@ -178,7 +180,7 @@ const ldJson = ld ? JSON.stringify(ld).replace(/</g, '\\u003c') : '';
   .puertas :global(.wa-ficha) { justify-self: start; }
   /* One column at every width: the site's container is a 680px notebook
      page, and two columns inside it would give the home 328px. */
-  .ausente { max-width: 52ch; display: grid; gap: var(--space-3); justify-items: start; padding: var(--space-6) 0; }
-  .ausente h1 { font-size: var(--text-display-lg); margin: 0; }
-  .ausente p { color: var(--muted); margin: 0; }
+  .missing { max-width: 52ch; display: grid; gap: var(--space-3); justify-items: start; padding: var(--space-6) 0; }
+  .missing h1 { font-size: var(--text-display-lg); margin: 0; }
+  .missing p { color: var(--muted); margin: 0; }
 </style>

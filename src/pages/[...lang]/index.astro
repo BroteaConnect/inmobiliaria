@@ -24,8 +24,8 @@ const { locale } = Astro.props;
   <script>
     import { list, pbUrl } from '../../lib/pb';
     import { localeFromPath, localePath, t } from '../../lib/i18n';
-    import { cargarNegocio, monedaDe } from '../../lib/negocio';
-    import { DEFAULT_CURRENCY, apunteDe, fotoUrl, fotos, metaDe, precioDe, type Propiedad } from '../../lib/propiedad';
+    import { loadBusiness, currencyOf } from '../../lib/negocio';
+    import { DEFAULT_CURRENCY, noteOf, photoUrl, photos, metaOf, priceOf, type Property } from '../../lib/property';
 
     // Astro bundles this script ONCE for every generated route, so the locale
     // cannot be compiled in: it is resolved from the URL at runtime — the same
@@ -46,7 +46,7 @@ const { locale } = Astro.props;
     let moneda = DEFAULT_CURRENCY;
 
     const cat = document.getElementById('catalogo')!;
-    let props: Propiedad[] = [];
+    let props: Property[] = [];
 
     // Placeholder sin foto: silueta de casa en SVG (sin emojis).
     const casaSvg = '<svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>';
@@ -60,19 +60,19 @@ const { locale } = Astro.props;
         return;
       }
       cat.innerHTML = props.map((p) => {
-        const apunte = apunteDe(p);
-        const meta = metaDe(locale, p);
-        const foto = fotoUrl(p, 0, true);
+        const apunte = noteOf(p);
+        const meta = metaOf(locale, p);
+        const foto = photoUrl(p, 0, true);
         return `
         <a class="card" href="${esc(localePath(locale, `/propiedad/${p.id}`))}" data-card data-id="${esc(p.id)}">
           ${foto ? `<img src="${esc(foto)}" alt="${esc(p.titulo)}" width="600" height="400" loading="lazy" />` : `<div class="sinfoto">${casaSvg}</div>`}
-          ${fotos(p).length > 1 ? `<span class="fotos-badge data">${_('card.photos', { count: fotos(p).length })}</span>` : ''}
+          ${photos(p).length > 1 ? `<span class="fotos-badge data">${_('card.photos', { count: photos(p).length })}</span>` : ''}
           <div class="card-body">
             ${p.municipio ? `<p class="eyebrow">${esc(p.municipio)}</p>` : ''}
             <h2>${esc(p.titulo)}</h2>
             ${apunte ? `<p class="apunte">${esc(apunte)}</p>` : ''}
             ${meta ? `<p class="meta data">${esc(meta)}</p>` : ''}
-            <p class="precio data">${esc(precioDe(locale, p, moneda))}</p>
+            <p class="precio data">${esc(priceOf(locale, p, moneda))}</p>
             <span class="ver">${_('card.cta')}</span>
           </div>
         </a>`;
@@ -80,14 +80,14 @@ const { locale } = Astro.props;
     }
 
     if (pbUrl() && !compartida) {
-      list<Propiedad>('propiedades', { filter: 'estado="publicada"', sort: '-created', perPage: '50' })
+      list<Property>('propiedades', { filter: 'estado="publicada"', sort: '-created', perPage: '50' })
         .then((r) => { props = r.items; render(); })
         .catch(() => { cat.innerHTML = `<p class="cargando">${_('catalog.error')}</p>`; });
 
       // Los ajustes pueden llegar después del catálogo: se repintan los
       // precios ya escritos.
-      cargarNegocio().then((d) => {
-        const cod = monedaDe(d);
+      loadBusiness().then((d) => {
+        const cod = currencyOf(d);
         if (cod && cod !== moneda) {
           moneda = cod;
           if (props.length) render();
@@ -144,7 +144,7 @@ const { locale } = Astro.props;
            background: var(--primary); color: var(--primary-contrast);
            border-radius: var(--radius); padding: .5rem 1.2rem;
            font-weight: 600; min-height: 44px;
-           transition: filter .15s ease, transform .15s ease, box-shadow .15s ease; }
+           transition-property: filter, transform, box-shadow; transition-duration: var(--duration-press); transition-timing-function: var(--ease-out); }
     .card:hover .ver { filter: brightness(1.06); box-shadow: var(--shadow); }
     .card:active .ver { transform: translateY(1px); filter: brightness(.97); }
     .fotos-badge { position: absolute; top: var(--space-2); right: var(--space-2);

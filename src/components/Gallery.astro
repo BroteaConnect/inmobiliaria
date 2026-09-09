@@ -7,11 +7,11 @@
 // it was DOM-built for the same reason it still is: `titulo` is agent input and
 // never touches innerHTML.
 import { t } from '../lib/i18n';
-import { fotoUrl, fotos, type Propiedad } from '../lib/propiedad';
+import { photoUrl, photos, type Property } from '../lib/property';
 
-interface Props { locale: string; p: Propiedad }
+interface Props { locale: string; p: Property }
 const { locale, p } = Astro.props;
-const urls = fotos(p).map((_, i) => fotoUrl(p, i));
+const urls = photos(p).map((_, i) => photoUrl(p, i));
 const total = urls.length;
 ---
 
@@ -43,14 +43,14 @@ const total = urls.length;
   if (gal && marco && principal && total > 1) {
     const locale = localeFromPath(location.pathname);
     const _ = (key: string, vars?: Record<string, string | number>) => t(locale, key, vars);
-    const titulo = gal.dataset.titulo ?? '';
+    const title = gal.dataset.titulo ?? '';
     let actual = 0;
     const minis: HTMLButtonElement[] = [];
 
     const ir = (i: number) => {
       actual = (i + total) % total;
       principal.src = urls[actual];
-      principal.alt = _('gallery.photoAlt', { title: titulo, n: actual + 1, total });
+      principal.alt = _('gallery.photoAlt', { title, n: actual + 1, total });
       minis.forEach((m, j) => {
         m.classList.toggle('activa', j === actual);
         if (j === actual) m.setAttribute('aria-current', 'true');

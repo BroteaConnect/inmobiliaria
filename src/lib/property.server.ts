@@ -1,10 +1,10 @@
 // Server side only: the published property behind an id. Imported by the
 // on-demand page, never by a browser script (it reads the runtime env).
 import { pbUrl } from './pb';
-import type { Propiedad } from './propiedad';
+import type { Property } from './property';
 
 /** The property is not for the public, or does not exist: the route answers 404. */
-export type Consulta = Propiedad | 'ausente' | 'error';
+export type Lookup = Property | 'missing' | 'error';
 
 /**
  * The PocketBase URL: inlined at build time like everywhere else in the app,
@@ -21,19 +21,19 @@ export function pbBase(): string {
  * `ausente` exactly like an unknown id: the page must not tell a crawler
  * that a listing exists in any state the CRM has not published.
  */
-export async function propiedadPublicada(id: string, base = pbBase()): Promise<Consulta> {
+export async function publishedProperty(id: string, base = pbBase()): Promise<Lookup> {
   // PocketBase ids are 15 alphanumerics; anything else cannot be a record and
   // is not worth a round trip.
-  if (!base || !/^[a-z0-9]{15}$/i.test(id)) return 'ausente';
+  if (!base || !/^[a-z0-9]{15}$/i.test(id)) return 'missing';
   try {
     const res = await fetch(`${base}/api/collections/propiedades/records/${encodeURIComponent(id)}`, {
       headers: { accept: 'application/json' },
       signal: AbortSignal.timeout(5000),
     });
-    if (res.status === 404) return 'ausente';
+    if (res.status === 404) return 'missing';
     if (!res.ok) return 'error';
-    const p = (await res.json()) as Propiedad;
-    return p?.id === id && p.estado === 'publicada' ? p : 'ausente';
+    const p = (await res.json()) as Property;
+    return p?.id === id && p.estado === 'publicada' ? p : 'missing';
   } catch {
     return 'error';
   }

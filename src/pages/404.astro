@@ -10,7 +10,7 @@ const locale = DEFAULT_LOCALE;
 ---
 
 <Layout locale={locale} title={t(locale, 'notFound.title')} back>
-  <section class="ausente">
+  <section class="missing">
     <h1>{t(locale, 'notFound.title')}</h1>
     <p>{t(locale, 'notFound.text')}</p>
     <a class="button" href={localePath(locale, '/')}>{t(locale, 'nav.catalog')}</a>
@@ -18,7 +18,7 @@ const locale = DEFAULT_LOCALE;
 </Layout>
 
 <style>
-  .ausente { max-width: 52ch; display: grid; gap: var(--space-3); justify-items: start; padding: var(--space-6) 0; }
-  .ausente h1 { font-size: var(--text-display-lg); margin: 0; }
-  .ausente p { color: var(--muted); margin: 0; }
+  .missing { max-width: 52ch; display: grid; gap: var(--space-3); justify-items: start; padding: var(--space-6) 0; }
+  .missing h1 { font-size: var(--text-display-lg); margin: 0; }
+  .missing p { color: var(--muted); margin: 0; }
 </style>
