@@ -1,5 +1,6 @@
 ---
 import Layout from '../../layouts/Layout.astro';
+import WhatsAppDoor from '../../components/WhatsAppDoor.astro';
 import { localePaths, t } from '../../lib/i18n';
 
 // One file, every language: / (es) and /en/ come from src/locales/config.json.
@@ -18,52 +19,13 @@ const { locale } = Astro.props;
     <p class="cargando">{t(locale, 'catalog.loading')}</p>
   </div>
 
-  <!-- Ficha + formulario de interés (se rellena al elegir propiedad) -->
-  <dialog id="ficha">
-    <button class="cerrar" id="cerrar-ficha" aria-label={t(locale, 'ficha.close')}>×</button>
-    <div id="ficha-contenido"></div>
-    <form id="interes">
-      <h3>{t(locale, 'form.title')}</h3>
-      <input type="hidden" name="propiedad" />
-      <label>{t(locale, 'form.name')} <input name="nombre" required autocomplete="name" /></label>
-      <label>{t(locale, 'form.phone')} <input name="telefono" required autocomplete="tel" /></label>
-      <label>{t(locale, 'form.email')} <input name="email" type="email" autocomplete="email" /></label>
-      <label>{t(locale, 'form.message')} <textarea name="mensaje" rows="3" placeholder={t(locale, 'form.messagePlaceholder')}></textarea></label>
-      <fieldset class="franjas">
-        <legend>{t(locale, 'form.franja')}</legend>
-        <div class="franjas-fila">
-          {['mananas', 'tardes', 'finde'].map((f) => (
-            <label class="franja">
-              <input type="radio" name="franja" value={f} />
-              <span>{t(locale, `form.franja.${f}`)}</span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      {/* Sin marcar no se envía: `required` lo impone el navegador antes de que
-          este formulario haga nada, así que no hay camino por el que un lead
-          entre sin consentimiento. Y lo que se guarda no es solo el "sí": se
-          guarda CUÁNDO y a QUÉ TEXTO, porque una casilla marcada no demuestra
-          nada un año después si nadie sabe qué decía. */}
-      <label class="consent">
-        <input type="checkbox" name="consentimiento" required />
-        <span set:html={t(locale, 'form.consent')} />
-      </label>
-      <button type="submit">{t(locale, 'form.submit')}</button>
-      <p id="interes-status" role="status"></p>
-    </form>
-    <div id="interes-hecho" hidden>
-      <p class="hecho-marca" aria-hidden="true">✓</p>
-      <h3 id="hecho-titulo"></h3>
-      <p id="hecho-sub"></p>
-      <p id="hecho-canal"></p>
-      <button type="button" class="hecho-volver" id="hecho-volver"></button>
-    </div>
-  </dialog>
+  <WhatsAppDoor class="wa-barra" label={t(locale, 'wa.barra')} message={t(locale, 'wa.mensajeGeneral')} />
 
   <script>
-    import { list, create, fileUrl, pbUrl } from '../../lib/pb';
-    import { fmtMoney, localeFromPath, t } from '../../lib/i18n';
+    import { list, pbUrl } from '../../lib/pb';
+    import { localeFromPath, localePath, t } from '../../lib/i18n';
+    import { cargarNegocio, monedaDe } from '../../lib/negocio';
+    import { DEFAULT_CURRENCY, apunteDe, fotoUrl, fotos, metaDe, precioDe, type Propiedad } from '../../lib/propiedad';
 
     // Astro bundles this script ONCE for every generated route, so the locale
     // cannot be compiled in: it is resolved from the URL at runtime — the same
@@ -71,37 +33,26 @@ const { locale } = Astro.props;
     const locale = localeFromPath(location.pathname);
     const _ = (key: string, vars?: Record<string, string | number>) => t(locale, key, vars);
 
-    interface Propiedad {
-      id: string; collectionId: string; titulo: string; municipio: string;
-      precio: number; habitaciones: number; banos: number; superficie: number;
-      descripcion: string; fotos: string[];
-    }
+    // The panel used to live at `?p=<id>`; those links are already out there
+    // in chats and keep resolving, now to the property's own address.
+    const compartida = new URLSearchParams(location.search).get('p');
+    if (compartida) location.replace(localePath(locale, `/propiedad/${encodeURIComponent(compartida)}`));
 
     // La moneda es un dato del negocio, no una constante del código: una
     // agencia que vende en dirhams y otra que vende en euros usan el mismo
     // sitio. Sale de `settings` (negocio.moneda) y AED es lo que había, así
     // que es lo que queda mientras nadie configure otra cosa. Intl decide el
     // formato por idioma ("1.234.567 AED" en es, "AED 1,234,567" en en).
-    let moneda = 'AED';
-    const precio = (n: number) => (n != null && Number.isFinite(n) ? fmtMoney(locale, n, moneda) : '');
-    const foto = (p: Propiedad, thumb = true) =>
-      p.fotos?.length ? fileUrl(p, p.fotos[0]) + (thumb ? '?thumb=600x400' : '') : '';
+    let moneda = DEFAULT_CURRENCY;
 
     const cat = document.getElementById('catalogo')!;
-    const ficha = document.getElementById('ficha') as HTMLDialogElement;
-    const fichaBody = document.getElementById('ficha-contenido')!;
-    const form = document.getElementById('interes') as HTMLFormElement;
-    const status = document.getElementById('interes-status')!;
     let props: Propiedad[] = [];
 
-    // El apunte de visita: primera frase de la descripción existente
-    // (elemento firma — cero cambios de esquema).
-    const apunteDe = (p: Propiedad) => {
-      const a = (p.descripcion ?? '').split(/\.\s/)[0].trim().slice(0, 140);
-      return a ? (/[.!?…]$/.test(a) ? a : `${a}.`) : '';
-    };
     // Placeholder sin foto: silueta de casa en SVG (sin emojis).
     const casaSvg = '<svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>';
+    // Everything from the database is agent input: escaped before it meets markup.
+    const esc = (s: unknown) => String(s ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
     function render() {
       if (!props.length) {
@@ -110,301 +61,38 @@ const { locale } = Astro.props;
       }
       cat.innerHTML = props.map((p) => {
         const apunte = apunteDe(p);
+        const meta = metaDe(locale, p);
+        const foto = fotoUrl(p, 0, true);
         return `
-        <article class="card" data-id="${p.id}">
-          ${foto(p) ? `<img src="${foto(p)}" alt="${p.titulo}" loading="lazy" />` : `<div class="sinfoto">${casaSvg}</div>`}
-          ${(p.fotos?.length ?? 0) > 1 ? `<span class="fotos-badge data">${_('card.photos', { count: p.fotos.length })}</span>` : ''}
+        <a class="card" href="${esc(localePath(locale, `/propiedad/${p.id}`))}" data-card data-id="${esc(p.id)}">
+          ${foto ? `<img src="${esc(foto)}" alt="${esc(p.titulo)}" width="600" height="400" loading="lazy" />` : `<div class="sinfoto">${casaSvg}</div>`}
+          ${fotos(p).length > 1 ? `<span class="fotos-badge data">${_('card.photos', { count: fotos(p).length })}</span>` : ''}
           <div class="card-body">
-            ${p.municipio ? `<p class="eyebrow">${p.municipio}</p>` : ''}
-            <h2>${p.titulo}</h2>
-            ${apunte ? `<p class="apunte">${apunte}</p>` : ''}
-            <p class="meta data">${_('card.meta', { rooms: p.habitaciones ?? '–', baths: p.banos ?? '–', area: p.superficie ?? '–' })}</p>
-            <p class="precio data">${precio(p.precio)}</p>
-            <button class="ver" data-id="${p.id}">${_('card.cta')}</button>
+            ${p.municipio ? `<p class="eyebrow">${esc(p.municipio)}</p>` : ''}
+            <h2>${esc(p.titulo)}</h2>
+            ${apunte ? `<p class="apunte">${esc(apunte)}</p>` : ''}
+            ${meta ? `<p class="meta data">${esc(meta)}</p>` : ''}
+            <p class="precio data">${esc(precioDe(locale, p, moneda))}</p>
+            <span class="ver">${_('card.cta')}</span>
           </div>
-        </article>`;
+        </a>`;
       }).join('');
-      cat.querySelectorAll<HTMLButtonElement>('.ver').forEach((b) =>
-        b.addEventListener('click', () => abrir(b.dataset.id!)));
     }
 
-    // Galería del detalle: DOM puro (sin innerHTML) para no interpolar
-    // texto del agente (titulo) en marcado — misma superficie XSS que antes.
-    function galeria(p: Propiedad): HTMLElement | null {
-      const urls = (p.fotos ?? []).map((f) => fileUrl(p, f));
-      if (!urls.length) return null;
-      const total = urls.length;
-      let actual = 0;
-
-      const gal = document.createElement('div');
-      gal.className = 'galeria';
-      const marco = document.createElement('div');
-      marco.className = 'galeria-marco';
-      marco.setAttribute('aria-live', 'polite'); // anuncia el alt al cambiar de foto
-      const principal = document.createElement('img');
-      principal.className = 'galeria-principal';
-      principal.src = urls[0]; // la foto visible sí va a tamaño original
-      principal.alt = _('gallery.photoAlt', { title: p.titulo, n: 1, total });
-      marco.append(principal);
-      gal.append(marco);
-      if (total === 1) return gal;
-
-      const minis: HTMLButtonElement[] = [];
-      const ir = (i: number) => {
-        actual = (i + total) % total;
-        principal.src = urls[actual];
-        principal.alt = _('gallery.photoAlt', { title: p.titulo, n: actual + 1, total });
-        minis.forEach((m, j) => {
-          m.classList.toggle('activa', j === actual);
-          if (j === actual) m.setAttribute('aria-current', 'true');
-          else m.removeAttribute('aria-current');
-        });
-        minis[actual].scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-      };
-
-      const tira = document.createElement('div');
-      tira.className = 'galeria-tira';
-      urls.forEach((u, i) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'galeria-mini' + (i === 0 ? ' activa' : '');
-        if (i === 0) b.setAttribute('aria-current', 'true');
-        b.setAttribute('aria-label', _('gallery.thumb', { n: i + 1, total }));
-        const img = document.createElement('img');
-        img.src = `${u}?thumb=600x400`;
-        img.alt = '';
-        img.loading = 'lazy';
-        b.append(img);
-        b.addEventListener('click', () => ir(i));
-        tira.append(b);
-        minis.push(b);
-      });
-
-      const flecha = (clase: string, etiqueta: string, delta: number) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = `galeria-flecha ${clase}`;
-        b.setAttribute('aria-label', etiqueta);
-        b.textContent = delta < 0 ? '‹' : '›';
-        b.addEventListener('click', () => ir(actual + delta));
-        return b;
-      };
-      marco.append(flecha('anterior', _('gallery.prev'), -1), flecha('siguiente', _('gallery.next'), 1));
-      gal.append(tira);
-      return gal;
-    }
-
-    /** La propiedad abierta: su título va en el mensaje de WhatsApp. */
-    let tituloActual = '';
-    let idActual = '';
-
-    function abrir(id: string) {
-      const p = props.find((x) => x.id === id)!;
-      tituloActual = p.titulo;
-      idActual = p.id;
-      const apunte = apunteDe(p);
-      const desc = (p.descripcion ?? '').trim();
-      // Si la descripción es una sola frase, el apunte ya la muestra entera.
-      const descDuplicada = !!apunte && (desc === apunte || `${desc}.` === apunte);
-      fichaBody.innerHTML = `
-        ${p.municipio ? `<p class="eyebrow">${p.municipio}</p>` : ''}
-        <h2>${p.titulo}</h2>
-        ${apunte ? `<p class="apunte">${apunte}</p>` : ''}
-        <p class="meta data">${_('card.meta', { rooms: p.habitaciones ?? '–', baths: p.banos ?? '–', area: p.superficie ?? '–' })}</p>
-        <p class="precio data">${precio(p.precio)}</p>
-        ${descDuplicada ? '' : `<p>${desc}</p>`}`;
-      const gal = galeria(p);
-      if (gal) fichaBody.prepend(gal);
-      ficha.dispatchEvent(new CustomEvent('brotea:ficha', { detail: { titulo: p.titulo } }));
-      (form.elements.namedItem('propiedad') as HTMLInputElement).value = p.id;
-      status.textContent = '';
-      // Otra propiedad, otro formulario: la confirmación de la anterior no se
-      // queda puesta encima de una ficha distinta.
-      form.hidden = false;
-      hecho.hidden = true;
-      ficha.showModal();
-      // La ficha abierta vive en la URL. Sin esto no hay forma de mandarle una
-      // propiedad a alguien por WhatsApp —que es exactamente lo que hace la
-      // gente— y el botón «atrás» del móvil se sale del sitio en vez de cerrar
-      // el panel. `pushState` no recarga nada: el catálogo ya está en memoria.
-      if (new URLSearchParams(location.search).get('p') !== id) {
-        history.pushState({ p: id }, '', `?p=${encodeURIComponent(id)}`);
-      }
-    }
-
-    /** Cierra y borra la propiedad de la URL, sin dejar una entrada más atrás. */
-    function cerrar(volviendo = false) {
-      if (ficha.open) ficha.close();
-      if (!volviendo && new URLSearchParams(location.search).has('p')) {
-        history.pushState({}, '', location.pathname);
-      }
-    }
-
-    // Atrás cierra el panel; adelante lo vuelve a abrir.
-    addEventListener('popstate', () => {
-      const id = new URLSearchParams(location.search).get('p');
-      if (id && props.some((x) => x.id === id)) abrir(id);
-      else cerrar(true);
-    });
-
-    document.getElementById('cerrar-ficha')!.addEventListener('click', () => cerrar());
-    // Escape y el clic en el fondo pasan por aquí: una sola salida, y la URL
-    // nunca se queda apuntando a una ficha cerrada.
-    ficha.addEventListener('close', () => cerrar(true));
-
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const data = Object.fromEntries(new FormData(form)) as Record<string, string>;
-      status.textContent = _('form.sending');
-      try {
-        await create('leads', {
-          nombre: data.nombre, telefono: data.telefono, email: data.email,
-          mensaje: data.mensaje, propiedad: data.propiedad, etapa: 'nuevo', origen: 'web',
-          franja: data.franja || undefined,
-          consentimiento: true,
-          consentimiento_en: new Date().toISOString(),
-          // El texto exacto que se aceptó, sin etiquetas: es la prueba.
-          consentimiento_texto: (_('form.consent') || '').replace(/<[^>]+>/g, '').trim().slice(0, 300),
-        });
-        // Aviso inmediato al topic del proyecto (chasis: requirements-api → Telegram)
-        const p = props.find((x) => x.id === data.propiedad);
-        fetch('https://api.brotea.dev/requirements', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            project: 'inmobiliaria', source: 'lead_web',
-            submitted_by: `${data.nombre} <${data.telefono}>`,
-            content: `LEAD para "${p?.titulo}": ${data.mensaje || '(sin mensaje)'} — ${data.email || 'sin email'}`,
-          }),
-        }).catch(() => {});
-        form.reset();
-        status.textContent = '';
-        mostrarHecho(data.nombre);
-      } catch {
-        status.textContent = _('form.error');
-      }
-    });
-
-    if (pbUrl()) {
+    if (pbUrl() && !compartida) {
       list<Propiedad>('propiedades', { filter: 'estado="publicada"', sort: '-created', perPage: '50' })
-        .then((r) => {
-          props = r.items;
-          render();
-          // Si el enlace traía una propiedad, se abre sola. Es lo que convierte
-          // un enlace compartido en algo que lleva a alguna parte en vez de a
-          // la portada.
-          const id = new URLSearchParams(location.search).get('p');
-          if (id && props.some((x) => x.id === id)) abrir(id);
-        })
+        .then((r) => { props = r.items; render(); })
         .catch(() => { cat.innerHTML = `<p class="cargando">${_('catalog.error')}</p>`; });
 
-      // El número de WhatsApp de la agencia vive en `settings`, no en el
-      // código: es un dato del negocio y cambia sin desplegar. Mientras no
-      // exista, los botones sencillamente no se pintan — un canal que no
-      // contesta es peor que ningún canal.
-      list<{ key: string; value: unknown }>('settings', { perPage: '50' })
-        .then((r) => {
-          const texto = (v: unknown): string => {
-            const o = typeof v === 'string' ? (() => { try { return JSON.parse(v); } catch { return null; } })() : v;
-            if (o && typeof o === 'object') {
-              const x = o as { text?: unknown; numero?: unknown };
-              if (typeof x.text === 'string') return x.text.trim();
-              if (typeof x.numero === 'string') return x.numero.trim();
-            }
-            return '';
-          };
-          const dato = (k: string) => texto(r.items.find((f) => f.key === k)?.value);
-          telefonoNegocio = dato('negocio.telefono');
-          // Un código ISO de tres letras o nada: `Intl` lanza con cualquier
-          // otra cosa y una portada en blanco por un ajuste mal escrito es
-          // peor que un precio en la moneda anterior.
-          const cod = dato('negocio.moneda').toUpperCase();
-          if (/^[A-Z]{3}$/.test(cod) && cod !== moneda) {
-            moneda = cod;
-            // Los ajustes pueden llegar después del catálogo: se repintan los
-            // precios ya escritos. La ficha abierta se repinta por dentro y no
-            // se reabre, que borraría lo que alguien esté escribiendo.
-            if (props.length) render();
-            const abierta = props.find((x) => x.id === idActual);
-            const nodo = fichaBody.querySelector('.precio');
-            if (abierta && nodo) nodo.textContent = precio(abierta.precio);
-          }
-          const num = dato('contacto.whatsapp').replace(/[^\d]/g, '');
-          if (num) montarWhatsApp(num);
-        })
-        .catch(() => {});
-    }
-
-    /**
-     * La pantalla de después: quién ha quedado en llamar y cuándo, no un
-     * «¡recibido!» que deja al cliente sin saber qué pasa ahora. El nombre es
-     * el que acaba de escribir; el teléfono, el que el titular haya puesto en
-     * Ajustes; y si no hay ninguno configurado, esa línea simplemente no sale
-     * en vez de prometer un número inventado.
-     */
-    const hecho = document.getElementById('interes-hecho')!;
-    function mostrarHecho(nombre: string) {
-      form.hidden = true;
-      hecho.hidden = false;
-      const pila = (nombre || '').trim().split(/\s+/)[0] ?? '';
-      document.getElementById('hecho-titulo')!.textContent =
-        pila ? _('form.hecho.titulo', { nombre: pila }) : _('form.hecho.tituloAnonimo');
-      document.getElementById('hecho-sub')!.textContent = _('form.hecho.sub');
-      const canal = document.getElementById('hecho-canal')!;
-      canal.textContent = telefonoNegocio ? _('form.hecho.telefono', { telefono: telefonoNegocio }) : '';
-      const previo = hecho.querySelector('.wa-hecho');
-      if (previo) previo.remove();
-      if (waNum) {
-        const a = document.createElement('a');
-        a.className = 'wa-ficha wa-hecho';
-        a.href = `https://wa.me/${waNum}?text=${encodeURIComponent(_('wa.mensajePropiedad', { propiedad: tituloActual }))}`;
-        a.target = '_blank';
-        a.rel = 'noreferrer';
-        a.innerHTML = waSvg;
-        a.appendChild(document.createTextNode(` ${_('wa.adelantar')}`));
-        hecho.insertBefore(a, document.getElementById('hecho-volver'));
-      }
-      const volver = document.getElementById('hecho-volver') as HTMLButtonElement;
-      volver.textContent = _('form.hecho.volver');
-      volver.onclick = () => { cerrar(); form.hidden = false; hecho.hidden = true; };
-    }
-
-    /** El teléfono del negocio y el WhatsApp, si el titular los ha configurado. */
-    let telefonoNegocio = '';
-    let waNum = '';
-
-    /** Los dos accesos al canal: uno por tarjeta y una barra fija abajo. */
-    const waSvg = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 2a9.9 9.9 0 0 0-8.5 15l-1.4 5 5.2-1.4A9.9 9.9 0 1 0 12 2Zm0 18a8 8 0 0 1-4.1-1.1l-.3-.2-3 .8.8-2.9-.2-.3A8 8 0 1 1 12 20Zm4.4-5.9c-.2-.1-1.4-.7-1.6-.8-.2-.1-.4-.1-.5.1l-.7.9c-.1.2-.3.2-.5.1a6.5 6.5 0 0 1-3.2-2.8c-.1-.2 0-.4.1-.5l.4-.5c.1-.2.1-.3 0-.5l-.7-1.6c-.2-.4-.4-.4-.5-.4h-.5a1 1 0 0 0-.7.3A2.9 2.9 0 0 0 7 10a5 5 0 0 0 1.1 2.7 11.4 11.4 0 0 0 4.4 3.9c1.6.6 1.9.5 2.3.5a2.5 2.5 0 0 0 1.6-1.2 2 2 0 0 0 .1-1.1c0-.1-.2-.2-.4-.3Z"/></svg>';
-
-    function montarWhatsApp(num: string) {
-      waNum = num;
-      const enlace = (texto: string) =>
-        `https://wa.me/${num}?text=${encodeURIComponent(texto)}`;
-      const rotular = (el: HTMLElement, texto: string) => {
-        el.innerHTML = waSvg;
-        el.appendChild(document.createTextNode(` ${texto}`));
-      };
-
-      const barra = document.createElement('a');
-      barra.className = 'wa-barra';
-      barra.href = enlace(_('wa.mensajeGeneral'));
-      barra.target = '_blank';
-      barra.rel = 'noreferrer';
-      rotular(barra, _('wa.barra'));
-      document.body.appendChild(barra);
-
-      // La ficha abierta también lo ofrece, con el título de la propiedad
-      // dentro del mensaje: quien escribe no tiene que explicar cuál es.
-      ficha.addEventListener('brotea:ficha', ((e: CustomEvent<{ titulo: string }>) => {
-        const previo = fichaBody.querySelector('.wa-ficha');
-        if (previo) previo.remove();
-        const a = document.createElement('a');
-        a.className = 'wa-ficha';
-        a.href = enlace(_('wa.mensajePropiedad', { propiedad: e.detail.titulo }));
-        a.target = '_blank';
-        a.rel = 'noreferrer';
-        rotular(a, _('wa.preguntar'));
-        fichaBody.appendChild(a);
-      }) as EventListener);
+      // Los ajustes pueden llegar después del catálogo: se repintan los
+      // precios ya escritos.
+      cargarNegocio().then((d) => {
+        const cod = monedaDe(d);
+        if (cod && cod !== moneda) {
+          moneda = cod;
+          if (props.length) render();
+        }
+      });
     }
   </script>
 
@@ -425,22 +113,21 @@ const { locale } = Astro.props;
     .cargando { color: var(--muted); max-width: 52ch; }
     /* El canal, en verde de WhatsApp y no en el color de marca: aquí el color
        no es identidad, es el nombre del sitio al que lleva. */
-    .wa-barra { position: fixed; inset: auto 0 0 0; z-index: 40; display: block;
+    .wa-barra { position: fixed; inset: auto 0 0 0; z-index: 40; display: flex; justify-content: center;
+                border-radius: 0;
                 padding: calc(var(--space-3) + env(safe-area-inset-bottom, 0)) var(--space-4) var(--space-3);
                 background: #075E54; color: #fff; text-align: center; font-weight: 600;
                 text-decoration: none; }
     .wa-barra:hover { filter: brightness(1.08); }
-    .wa-ficha { display: inline-block; margin-top: var(--space-4); padding: .6rem 1.2rem;
-                border-radius: var(--radius); background: #075E54; color: #fff;
-                font-weight: 600; text-decoration: none; }
     /* La barra tapa el final de la página: se le hace sitio. */
-    body:has(.wa-barra) main { padding-bottom: var(--space-6); }
+    body:has(.wa-barra:not([hidden])) main { padding-bottom: var(--space-6); }
     .card { position: relative; background: var(--surface); border: 1px solid var(--border);
             border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden;
-            display: flex; flex-direction: column;
+            display: flex; flex-direction: column; color: inherit; text-decoration: none;
             transition: transform .18s ease, box-shadow .18s ease; }
     .card:hover { transform: translateY(-3px);
                   box-shadow: var(--shadow), 0 12px 28px rgba(20, 52, 51, .12); }
+    .card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
     .card img { width: 100%; aspect-ratio: 3/2; object-fit: cover; display: block; }
     .sinfoto { aspect-ratio: 3/2; display: grid; place-items: center;
                background: var(--bg); color: var(--muted); }
@@ -452,141 +139,17 @@ const { locale } = Astro.props;
     /* Latón solo en datos: el precio es numeral, nunca fondo ni botón. */
     .precio { font-family: var(--font-sans); font-weight: 700; font-size: var(--text-data-lg);
               margin: 0; color: var(--accent); }
-    .ver { align-self: start; background: var(--primary); color: var(--primary-contrast);
-           border: 0; border-radius: var(--radius); padding: .5rem 1.2rem; font: inherit;
-           font-weight: 600; cursor: pointer; min-height: 44px;
+    /* The card is the link; this is its visible handle, not a second target. */
+    .ver { align-self: start; display: inline-flex; align-items: center;
+           background: var(--primary); color: var(--primary-contrast);
+           border-radius: var(--radius); padding: .5rem 1.2rem;
+           font-weight: 600; min-height: 44px;
            transition: filter .15s ease, transform .15s ease, box-shadow .15s ease; }
-    .ver:hover { filter: brightness(1.06); box-shadow: var(--shadow); }
-    .ver:active { transform: translateY(1px); filter: brightness(.97); }
-    .ver:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-    /* La ficha se abre a un lado, no en el centro. Quien mira una propiedad
-       está recorriendo el catálogo: un modal centrado le quita la lista de
-       delante y le obliga a reencontrar dónde estaba al cerrarlo. El panel la
-       deja detrás, atenuada y en su sitio. Es <dialog> igual que antes, así que
-       la trampa de foco, Escape y la capa superior siguen saliendo gratis. */
-    /* `inset` + `margin: 0` en vez de `margin-left: auto`: el estilo de agente
-       de usuario le pone a un <dialog> `max-width: calc(100% - 6px - 2em)` y
-       márgenes automáticos, y con eso el panel se quedaba en 358 px de 390 en
-       el móvil —medido, no supuesto—. Fijando los bordes no hay nada que
-       negociar con el navegador. */
-    dialog#ficha { border: 0; border-inline-start: 1px solid var(--border); border-radius: 0;
-                   background: var(--surface); color: var(--text);
-                   position: fixed; inset: 0 0 0 auto; margin: 0;
-                   width: min(34rem, 100%); max-width: 100%;
-                   height: 100dvh; max-height: none;
-                   padding: var(--space-5); overflow-y: auto; }
-    dialog#ficha::backdrop { background: rgba(20, 52, 51, .55); }
-    @media (prefers-reduced-motion: no-preference) {
-      dialog#ficha[open] { animation: ficha-entra .18s ease-out; }
-      @keyframes ficha-entra { from { transform: translateX(2rem); opacity: 0; }
-                               to { transform: none; opacity: 1; } }
-    }
-    /* En el móvil no hay catálogo detrás que preservar: ocupa la pantalla. */
-    /* En el móvil se estira entre los cuatro bordes en vez de declarar un
-       ancho: con `inset: 0` y `width: auto` no hay porcentaje que el navegador
-       pueda resolver contra otra cosa —medido: con `width: 100%` se quedaba en
-       358 de 390—. */
-    @media (max-width: 640px) {
-      dialog#ficha { inset: 0; width: 100dvw; height: 100dvh; max-width: 100dvw; max-height: 100dvh; }
-    }
-    dialog#ficha h2 { font-size: var(--text-display-lg); font-weight: 700;
-                      letter-spacing: -0.015em; line-height: 1.15; margin: var(--space-2) 0; }
-    dialog#ficha .apunte { margin: var(--space-2) 0 var(--space-3); }
-    dialog#ficha img { width: 100%; border-radius: var(--radius); }
-    dialog#ficha .cerrar { float: right; background: none; border: 0; font-size: 1.6rem;
-                           cursor: pointer; color: var(--muted); min-width: 44px; min-height: 44px;
-                           border-radius: var(--radius); transition: color .15s ease, background .15s ease; }
-    dialog#ficha .cerrar:hover { color: var(--text); background: color-mix(in srgb, var(--muted) 12%, transparent); }
-    dialog#ficha .cerrar:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-    #interes[hidden] { display: none; }
-    #interes { margin-top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-3);
-               border-top: 1px solid var(--border); padding-top: var(--space-4); }
-    #interes h3 { font-size: var(--text-title); font-weight: 600; letter-spacing: -0.01em; margin: 0; }
-    #interes label { font-weight: 600; font-size: .9rem; display: flex; flex-direction: column; gap: 4px; }
-    #interes input, #interes textarea { padding: .55rem .7rem; border: 1px solid var(--border);
-      border-radius: var(--radius); font: inherit; background: var(--bg); color: var(--text);
-      min-height: 44px; transition: border-color .15s ease; }
-    #interes input:focus-visible, #interes textarea:focus-visible {
-      outline: 2px solid var(--primary); outline-offset: 1px; border-color: var(--primary); }
-    /* Las tres franjas, como píldoras: el radio real sigue ahí debajo (foco,
-       teclado y lectores de pantalla lo necesitan), solo que no se ve. */
-    #interes .franjas { border: 0; padding: 0; margin: 0; }
-    #interes .franjas legend { padding: 0; font-weight: 600; font-size: .75rem;
-                               letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-    #interes .franjas-fila { display: flex; flex-wrap: wrap; gap: var(--space-2);
-                             margin-top: var(--space-2); }
-    #interes .franja { flex-direction: row; display: inline-flex; }
-    #interes .franja input { position: absolute; opacity: 0; width: 0; height: 0; min-height: 0; margin: 0; }
-    #interes .franja span { display: inline-block; border: 1px solid var(--border);
-      border-radius: 999px; padding: .45rem .95rem; font-weight: 500; font-size: .9rem;
-      cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease; }
-    #interes .franja:hover span { border-color: var(--primary); }
-    #interes .franja input:checked + span { background: var(--primary); color: var(--primary-contrast);
-                                            border-color: var(--primary); }
-    #interes .franja input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
-    /* El consentimiento es una fila, no una columna: la casilla y su texto
-       leídos juntos son la frase que se guarda. */
-    #interes .consent { flex-direction: row; align-items: flex-start; gap: var(--space-2);
-                        font-weight: 400; line-height: 1.5; }
-    #interes .consent input { min-height: 0; width: 1.15rem; height: 1.15rem; margin-top: .15rem;
-                              flex: none; accent-color: var(--primary); }
-    #interes button { background: var(--primary); color: var(--primary-contrast);
-      border: 0; border-radius: var(--radius); padding: .6rem 1.4rem; font: inherit; font-weight: 600;
-      cursor: pointer; min-height: 44px;
-      transition: filter .15s ease, transform .15s ease, box-shadow .15s ease; }
-    #interes button:hover { filter: brightness(1.06); box-shadow: var(--shadow); }
-    #interes button:active { transform: translateY(1px); filter: brightness(.97); }
-    #interes button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-    #interes-status { color: var(--ok); min-height: 1.2em; margin: 0; }
-    /* Lo de después del envío. No es un aviso al pie del formulario: ocupa su
-       sitio, porque a partir de ahí lo único que queda por decir es quién
-       llama y cuándo. */
-    #interes-hecho { margin-top: var(--space-5); border-top: 1px solid var(--border);
-                     padding-top: var(--space-5); display: flex; flex-direction: column;
-                     gap: var(--space-3); align-items: flex-start; }
-    #interes-hecho[hidden] { display: none; }
-    #interes-hecho .hecho-marca { width: 3.25rem; height: 3.25rem; border-radius: 50%;
-      background: var(--ok); color: var(--bg); display: grid; place-items: center;
-      font-size: 1.6rem; line-height: 1; margin: 0; }
-    #interes-hecho h3 { font-size: var(--text-display-lg); font-weight: 700;
-                        letter-spacing: -0.02em; margin: 0; }
-    #interes-hecho p { margin: 0; }
-    #interes-hecho #hecho-canal:empty { display: none; }
-    #interes-hecho #hecho-sub { color: var(--muted); }
-    #interes-hecho .hecho-volver { background: none; border: 0; padding: 0; font: inherit;
-      font-weight: 600; color: var(--primary); cursor: pointer; min-height: 44px; }
-    #interes-hecho .hecho-volver:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-    /* Galería de la ficha: nodos creados en runtime → estilos globales (ver nota arriba). */
+    .card:hover .ver { filter: brightness(1.06); box-shadow: var(--shadow); }
+    .card:active .ver { transform: translateY(1px); filter: brightness(.97); }
     .fotos-badge { position: absolute; top: var(--space-2); right: var(--space-2);
                    background: rgba(20, 52, 51, .72); color: #FBF9F4; border-radius: var(--radius);
                    padding: .2rem .55rem; font-size: .8rem; font-weight: 500;
                    letter-spacing: .01em; line-height: 1.4; pointer-events: none; }
-    .galeria { display: flex; flex-direction: column; gap: var(--space-2); }
-    .galeria-marco { position: relative; }
-    dialog#ficha .galeria-principal { width: 100%; aspect-ratio: 3/2; object-fit: cover;
-                                      border-radius: var(--radius); background: var(--bg); display: block; }
-    .galeria-flecha { position: absolute; top: 50%; transform: translateY(-50%);
-                      min-width: 44px; min-height: 44px; border: 0; border-radius: var(--radius);
-                      background: rgba(20, 52, 51, .55); color: #FBF9F4; font-size: 1.6rem; line-height: 1;
-                      cursor: pointer; transition: background .15s ease; }
-    .galeria-flecha:hover { background: rgba(20, 52, 51, .78); }
-    .galeria-flecha:active { transform: translateY(calc(-50% + 1px)); }
-    .galeria-flecha:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-    .galeria-flecha.anterior { left: var(--space-2); }
-    .galeria-flecha.siguiente { right: var(--space-2); }
-    .galeria-tira { display: flex; gap: var(--space-2); overflow-x: auto;
-                    padding-bottom: 4px; scroll-snap-type: x proximity; }
-    .galeria-mini { flex: 0 0 auto; width: 72px; height: 54px; min-height: 44px; padding: 0;
-                    border: 2px solid transparent; border-radius: var(--radius); overflow: hidden;
-                    background: var(--bg); cursor: pointer; scroll-snap-align: start;
-                    transition: border-color .15s ease; }
-    .galeria-mini.activa { border-color: var(--primary); }
-    .galeria-mini:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-    dialog#ficha .galeria-mini img { width: 100%; height: 100%; object-fit: cover;
-                                     border-radius: 0; display: block; }
-    @media (max-width: 719px) {
-      dialog#ficha { width: calc(100vw - var(--space-4) * 2); padding: var(--space-4);
-                     max-height: calc(100dvh - var(--space-6)); }
-    }
   </style>
 </Layout>
