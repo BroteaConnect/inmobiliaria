@@ -7,8 +7,10 @@
 import LanguageSwitcher from './LanguageSwitcher.astro';
 import { localePath, t } from '../lib/i18n';
 
-interface Props { locale: string }
-const { locale } = Astro.props;
+// `back` gives the nav a job on a page that hangs off the catalogue (a
+// property): the first link reads "all properties" instead of "home".
+interface Props { locale: string; back?: boolean }
+const { locale, back = false } = Astro.props;
 ---
 
 <nav>
@@ -27,7 +29,7 @@ const { locale } = Astro.props;
     <span class="bar"></span>
   </button>
   <div class="links" id="nav-links">
-    <a href={localePath(locale, '/')}>{t(locale, 'nav.home')}</a>
+    <a href={localePath(locale, '/')}>{t(locale, back ? 'nav.catalog' : 'nav.home')}</a>
     <!-- brotea:nav -->
     <LanguageSwitcher locale={locale} />
   </div>

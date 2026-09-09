@@ -12,8 +12,14 @@ import { DEFAULT_LOCALE, alternates, dirOf, localePath, stripLocale, t } from '.
 // `title` es opcional a propósito: el catálogo usa el título del sitio, y una
 // página legal necesita el suyo o las tres salen con el mismo en la pestaña y en
 // el buscador.
-interface Props { locale?: string; title?: string }
-const { locale = DEFAULT_LOCALE, title } = Astro.props;
+//
+// `description` is optional the same way: the site's own line unless a page
+// (a property) has something truer to say. Anything else a page needs in
+// <head> (og: tags, structured data) goes through the `head` slot, so one
+// layout carries every route instead of a copy per shape of page.
+// `back` tells the nav that this page hangs off the catalogue.
+interface Props { locale?: string; title?: string; description?: string; back?: boolean }
+const { locale = DEFAULT_LOCALE, title, description, back = false } = Astro.props;
 // hreflang wants absolute URLs; `site` in astro.config makes these absolute.
 const path = stripLocale(Astro.url.pathname);
 const abs = (href: string) => (Astro.site ? new URL(href, Astro.site).href : href);
@@ -25,18 +31,20 @@ const abs = (href: string) => (Astro.site ? new URL(href, Astro.site).href : hre
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{title ? `${title} · ${t(locale, 'site.name')}` : t(locale, 'page.title')}</title>
-    <meta name="description" content={t(locale, 'page.description')} />
+    <meta name="description" content={description || t(locale, 'page.description')} />
+    <link rel="canonical" href={abs(localePath(locale, path))} />
     {alternates(path).map((a) => (
       <link rel="alternate" hreflang={a.hreflang} href={abs(a.href)} />
     ))}
     <link rel="alternate" hreflang="x-default" href={abs(localePath(DEFAULT_LOCALE, path))} />
+    <slot name="head" />
     <!-- brotea:head -->
     <meta name="pb-url" content={import.meta.env.PUBLIC_PB_URL} />
     <script is:inline defer id="brotea-errors" src="/brotea-errors.js" data-dsn={import.meta.env.PUBLIC_GLITCHTIP_DSN}></script>
     <script is:inline defer src={import.meta.env.PUBLIC_UMAMI_SRC} data-website-id={import.meta.env.PUBLIC_UMAMI_WEBSITE_ID}></script>
   </head>
   <body>
-    <Nav locale={locale} />
+    <Nav locale={locale} back={back} />
     <main>
       <slot />
     </main>
