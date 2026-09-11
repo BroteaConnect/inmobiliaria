@@ -15,6 +15,50 @@ from feature 47 and live in `src/styles/identity.css`; they are documented
 in [docs/visual-identity.md](visual-identity.md). This page covers UI
 structure only — which token to use for which job is over there.
 
+## The shell: two widths, not one
+
+The theme contract gives a page two widths — `container`, the shell the page
+is built in, and `measure`, the width prose is read at. The `brotea` theme
+sets **both to 680px**, so until 2026-09-11 every page of this site was a
+680px column at any screen size: a 1280px laptop showed the phone layout with
+632px of bare Arena down the sides, and the property page's lead form sat
+887px below the fold because the gallery had nowhere to sit beside it.
+
+`src/styles/identity.css` restores the two meanings for this app, where every
+other client-specific token already lives:
+
+```css
+--container: 1180px;   /* the shell: nav, catalogue, footer, the property page */
+--measure: 680px;      /* the reading width: hero, prose, legal pages */
+```
+
+Whether the theme itself should carry a real shell width is a fleet decision
+(ten apps inherit that 680px, and the CRM had already worked around it with a
+hardcoded 1200px); it does not belong in this repo.
+
+What each width is for:
+
+| Element | Width | Why |
+|---|---|---|
+| `main`, `.pie-cols` (footer) | `--container` | the shell; both already read the token, so they widened for free |
+| `nav` | `--container`, through padding | the bar spans the viewport, its contents line up with the shell (`padding-inline: max(var(--space-4), calc((100% - var(--container)) / 2 + var(--space-4)))`). No wrapper element: the `brotea:nav` marker has to stay inside `.links` |
+| `.hero`, `.legal`, `.descripcion` | `--measure` (or a `ch` measure) | prose. A headline set across 1180px is a headline nobody finishes |
+| `.catalogo` | fills the shell | `repeat(auto-fill, minmax(min(100%, 300px), 1fr))`: 3 across on a laptop, 2 on a tablet, 1 on a phone. 300px keeps a card wide enough for its 3:2 photo to be worth looking at |
+| `.ficha` (property) | two columns above `60rem` | `minmax(0, 1.8fr) minmax(19rem, 1fr)`: gallery and facts on one side, the way to answer them on the other, with `.puertas` sticky so the form follows the gallery down |
+
+Measured at four widths, before and after (`docs/review/shell/`):
+
+| width | before | after |
+|---|---|---|
+| 390 | 1 column, card 358px, form 714px down | unchanged: the phone was always the layout that worked |
+| 768 | 2 columns 312px, 120px dead, photo 648px | 2 columns 356px, 32px dead, photo 736px |
+| 1280 | 2 columns, 632px dead, photo 648px, form 887px down | 3 columns 367px, 132px dead, photo 712px, form 178px down and beside the gallery |
+| 1600 | 2 columns, 952px dead | 3 columns, 452px dead |
+
+The shell stops at 1180px on purpose: a catalogue that keeps widening turns
+into four thin slices of photo, and a line of prose that keeps widening stops
+being read.
+
 ## Nav component (`src/components/Nav.astro`)
 
 The component takes a required `locale` prop (i18n contract: components
