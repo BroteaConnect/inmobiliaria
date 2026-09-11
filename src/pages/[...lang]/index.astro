@@ -59,13 +59,18 @@ const { locale } = Astro.props;
         cat.innerHTML = `<p class="cargando">${_('catalog.empty')}</p>`;
         return;
       }
-      cat.innerHTML = props.map((p) => {
+      cat.innerHTML = props.map((p, i) => {
+        // The first photo is the one the page is judged on, so it is asked
+        // for at high priority and never deferred to a layout pass. The rest
+        // stay lazy — which does NOT delay the ones already on screen, only
+        // the ones below it, and how many are on screen depends on a grid
+        // that has not been laid out at the moment this string is built.
         const apunte = noteOf(p);
         const meta = metaOf(locale, p);
         const foto = photoUrl(p, 0, true);
         return `
         <a class="card" href="${esc(localePath(locale, `/propiedad/${p.id}`))}" data-card data-id="${esc(p.id)}">
-          ${foto ? `<img src="${esc(foto)}" alt="${esc(p.titulo)}" width="600" height="400" loading="lazy" />` : `<div class="sinfoto">${casaSvg}</div>`}
+          ${foto ? `<img src="${esc(foto)}" alt="${esc(p.titulo)}" width="600" height="400" ${i === 0 ? 'loading="eager" fetchpriority="high"' : 'loading="lazy"'} />` : `<div class="sinfoto">${casaSvg}</div>`}
           ${photos(p).length > 1 ? `<span class="fotos-badge data">${_('card.photos', { count: photos(p).length })}</span>` : ''}
           <div class="card-body">
             ${p.municipio ? `<p class="eyebrow">${esc(p.municipio)}</p>` : ''}
@@ -99,6 +104,10 @@ const { locale } = Astro.props;
   <!-- El catálogo se genera desde JS: estilos globales a propósito
        (los estilos scoped de Astro no alcanzan nodos creados en runtime). -->
   <style is:global>
+    /* The hero is prose: it keeps the reading width even though the page
+       around it is now as wide as the screen. A headline set across 1180px
+       is a headline nobody finishes. */
+    .hero { max-width: var(--measure); }
     .hero h1 { font-size: var(--text-display-xl); font-weight: 800; letter-spacing: -0.02em;
                line-height: 1.05; margin: 0 0 var(--space-3); }
     .hero .lede { color: var(--muted); font-size: var(--text-body-lg); line-height: 1.55;
@@ -108,7 +117,10 @@ const { locale } = Astro.props;
                    background: var(--accent); margin: var(--space-5) 0 0; }
     .hero-filete::after { content: ''; position: absolute; right: -10px; top: -2px;
                           width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-    .catalogo { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    /* Three across on a laptop, two on a tablet, one on a phone — the shell
+       decides, the grid just fills it. 300px keeps a card wide enough for a
+       3:2 photo to be worth looking at instead of four thin slices. */
+    .catalogo { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
                 gap: var(--space-5); margin-top: var(--space-6); }
     .cargando { color: var(--muted); max-width: 52ch; }
     /* El canal, en verde de WhatsApp y no en el color de marca: aquí el color

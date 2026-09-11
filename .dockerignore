@@ -1,5 +1,9 @@
 node_modules
 dist
+# `docs/review/` holds the before/after screenshots of every interface change
+# (5.9 MB and growing) and nothing in the image reads the documentation, so
+# `COPY . .` in the build stage should not carry it. The CRM does the same.
+docs
 .astro
 .git
 .env

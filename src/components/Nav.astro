@@ -69,7 +69,11 @@ const { locale, back = false } = Astro.props;
     display: flex;
     align-items: center;
     gap: var(--space-4);
-    padding: var(--space-3) var(--space-4);
+    /* The bar spans the viewport; what is IN it lines up with the shell, so
+       the wordmark sits over the first card instead of out at the edge with
+       the page floating in the middle. No wrapper element: the `brotea:nav`
+       marker has to stay where it is. */
+    padding: var(--space-3) max(var(--space-4), calc((100% - var(--container)) / 2 + var(--space-4)));
     border-bottom: 1px solid var(--border);
     background: var(--surface);
     background: color-mix(in srgb, var(--surface) 82%, transparent);

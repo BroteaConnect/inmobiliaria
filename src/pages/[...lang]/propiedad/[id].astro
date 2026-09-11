@@ -175,11 +175,39 @@ const ldJson = ld ? JSON.stringify(ld).replace(/</g, '\\u003c') : '';
   .descripcion { max-width: 62ch; }
   .descripcion p { line-height: 1.6; margin: 0 0 var(--space-3); }
   .puertas { display: grid; gap: var(--space-4); align-content: start; }
+  /* Two columns once there is room for both: the gallery and the facts on one
+     side, the way to answer them on the other. Under this width they stack,
+     which is the phone layout and was the only layout there was.
+     `minmax(0, …)` on the left or a wide photo pushes the form off.
+     68rem and not 60rem: between 960px and ~1080px the split would make the
+     photo SMALLER than the single column it replaces (581px at 960 against
+     648px today), and a property page that shrinks its photo to fit a form
+     has the trade backwards. */
+  @media (min-width: 68rem) {
+    .ficha {
+      grid-template-columns: minmax(0, 1.8fr) minmax(19rem, 1fr);
+      column-gap: var(--space-6);
+      align-items: start;
+    }
+    .volver { grid-column: 1 / -1; }
+  }
+  /* The form follows the gallery down — but only where the whole of it fits
+     on screen. A sticky element taller than the viewport does not scroll: it
+     pins its top and hides its own bottom, so on a 700px-tall laptop the
+     submit button became unreachable, and focusing it by keyboard scrolled
+     the page to a place the sticky offset immediately undid. Where it does
+     not fit, the form simply scrolls with the page, which is what it did
+     before and is not a problem. */
+  @media (min-width: 68rem) and (min-height: 52rem) {
+    .puertas {
+      position: sticky;
+      top: calc(var(--space-6) * 2);
+      align-self: start;
+    }
+  }
   /* The secondary door sits beside the form, on the primary colour with the
      glyph carrying the recognition; it is present only when a number is. */
   .puertas :global(.wa-ficha) { justify-self: start; }
-  /* One column at every width: the site's container is a 680px notebook
-     page, and two columns inside it would give the home 328px. */
   .missing { max-width: 52ch; display: grid; gap: var(--space-3); justify-items: start; padding: var(--space-6) 0; }
   .missing h1 { font-size: var(--text-display-lg); margin: 0; }
   .missing p { color: var(--muted); margin: 0; }

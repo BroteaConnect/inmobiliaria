@@ -241,7 +241,9 @@ Closed here means verified against the tree at `4fa3574` and the live site.
 | GSAP patterns, `window` scroll listener, `useEffect` cleanup, client-leaf isolation | closed | none; there is no React on the page |
 | Reduced motion | closed | `base.css` collapse; `ficha-entra` also gated (`index.astro:479`) |
 | Dark mode tokens in both modes | closed in PR 4 | tell 3: `--bg-invert`, `--text-invert`, `--shadow`, `--ok` missing from the dark blocks |
-| Mobile collapse explicit | closed | grid `auto-fill 260px`, panel full-screen ≤ 640px, footer one column ≤ 720px; PR 3 declares its own |
+| Mobile collapse explicit | closed | grid `auto-fill min(100%, 300px)`, panel full-screen ≤ 640px, footer one column ≤ 720px; PR 3 declares its own |
+| Shell and measure are two widths | closed | `--container: 1180px` (nav, catalogue, footer, property page) and `--measure: 680px` (hero, prose, legal) in `identity.css`; the theme ships both at 680px, which made every page a phone column on a laptop. docs/frontend-ui.md carries the table |
+| Desktop split of the property page | closed | two columns above `68rem` (`minmax(0, 1.8fr) minmax(19rem, 1fr)`); below it the split would shrink the photo it exists to show. The form is sticky only above `52rem` of viewport height, because a sticky taller than the screen hides its own submit button |
 | Viewport stability | closed | `100dvh`, no `100vh` heights |
 | Empty, loading, error states | closed in PR 2 and 3 | catalogue has all three; PR 2 adds the 404, PR 3 the filtered-empty |
 | Cards omitted for spacing | closed | cards carry photographs, elevation is real |

@@ -33,6 +33,20 @@
   --text-data-lg: 1.35rem;                        /* precio — Archivo 700 tnum */
   --text-data: 0.9rem;                            /* meta — Archivo 500 tnum */
   --text-eyebrow: 0.78rem;                        /* municipio — uppercase */
+
+  /* Widths. The theme contract gives two: `container` is the shell the page
+   * is built in, `measure` the width prose is read at. The `brotea` theme
+   * sets BOTH to 680px, so every page of this site was a 680px column at any
+   * screen size — a 1280px laptop showed the phone layout with 316px of bare
+   * Arena down each side, and the property form sat 900px below the fold
+   * because the gallery had nowhere to sit beside it. The CRM had already
+   * worked around the same value with a hardcoded 1200px.
+   *
+   * Restored here, in the app's own layer, to what the contract says they
+   * mean. Whether the theme itself should change is a fleet decision (ten
+   * apps inherit that 680px) and does not belong in this repo. */
+  --container: 1180px;   /* the shell: nav, catalogue, footer, the property page */
+  --measure: 680px;      /* the reading width: hero, prose, legal pages */
 }
 
 /* "La misma costa de noche" — override BOTH dark selectors or the factory
