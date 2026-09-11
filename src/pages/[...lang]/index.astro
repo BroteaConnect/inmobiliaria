@@ -60,16 +60,17 @@ const { locale } = Astro.props;
         return;
       }
       cat.innerHTML = props.map((p, i) => {
-        // The first row is what the page is judged on: those images are asked
-        // for immediately, the rest when they are scrolled to. Every card used
-        // to be lazy, which on a wide grid means the visible ones load last.
-        const carga = i < 3 ? 'eager' : 'lazy';
+        // The first photo is the one the page is judged on, so it is asked
+        // for at high priority and never deferred to a layout pass. The rest
+        // stay lazy — which does NOT delay the ones already on screen, only
+        // the ones below it, and how many are on screen depends on a grid
+        // that has not been laid out at the moment this string is built.
         const apunte = noteOf(p);
         const meta = metaOf(locale, p);
         const foto = photoUrl(p, 0, true);
         return `
         <a class="card" href="${esc(localePath(locale, `/propiedad/${p.id}`))}" data-card data-id="${esc(p.id)}">
-          ${foto ? `<img src="${esc(foto)}" alt="${esc(p.titulo)}" width="600" height="400" loading="${carga}" fetchpriority="${i === 0 ? 'high' : 'auto'}" />` : `<div class="sinfoto">${casaSvg}</div>`}
+          ${foto ? `<img src="${esc(foto)}" alt="${esc(p.titulo)}" width="600" height="400" ${i === 0 ? 'loading="eager" fetchpriority="high"' : 'loading="lazy"'} />` : `<div class="sinfoto">${casaSvg}</div>`}
           ${photos(p).length > 1 ? `<span class="fotos-badge data">${_('card.photos', { count: photos(p).length })}</span>` : ''}
           <div class="card-body">
             ${p.municipio ? `<p class="eyebrow">${esc(p.municipio)}</p>` : ''}
