@@ -6,7 +6,7 @@
 // lead-origin.mjs directly.
 import { encode } from 'uqr';
 
-export { leadOrigin, POSTER_ORIGIN } from './lead-origin.mjs';
+export { decideOrigin, leadOrigin, originKey, POSTER_ORIGIN } from './lead-origin.mjs';
 
 /** Four modules of white around the code: the quiet zone the QR spec asks for. */
 const QUIET = 4;

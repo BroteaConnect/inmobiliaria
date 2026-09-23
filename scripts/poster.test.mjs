@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { leadOrigin, posterTarget, qrSvg } from '../src/lib/poster.mjs';
+import { decideOrigin, originKey } from '../src/lib/lead-origin.mjs';
 
 const SITE = 'https://inmobiliaria.brotea.dev';
 const ID = 'oqv58oyqx44q6vs';
@@ -48,4 +49,15 @@ test('qrSvg: an inline, themeable, accessible QR the gate can read', () => {
 test('qrSvg: data-qr is attribute-escaped', () => {
   const svg = qrSvg('https://x.test/?a=1&b="2"', 'x');
   assert.match(svg, /data-qr="https:\/\/x\.test\/\?a=1&amp;b=&quot;2&quot;"/);
+});
+
+test('decideOrigin: the lead form saves cartel from the URL or from the remembered visit', () => {
+  assert.equal(originKey(ID), `origen:${ID}`);
+  assert.equal(decideOrigin('?origen=cartel', null), 'cartel');
+  assert.equal(decideOrigin('', 'cartel'), 'cartel');
+  assert.equal(decideOrigin('?origen=web', 'cartel'), 'cartel');
+  assert.equal(decideOrigin('', null), 'web');
+  assert.equal(decideOrigin('', 'Cartel'), 'web');
+  assert.equal(decideOrigin('?origen=Cartel', 'web'), 'web');
+  assert.equal(decideOrigin(undefined, undefined), 'web');
 });

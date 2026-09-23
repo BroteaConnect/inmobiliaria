@@ -60,7 +60,7 @@ const price = p ? realPrice(p) : 0;
         <h1>{title}</h1>
       </header>
 
-      {photo && <img class="foto" src={photo} alt="" width="1200" height="800" fetchpriority="high" decoding="async" />}
+      {photo && <img class="foto photo" src={photo} alt="" width="1200" height="800" fetchpriority="high" decoding="async" />}
 
       <div class="datos">
         <p class="precio data" data-precio={price || undefined}>{priceOf(locale, p)}</p>
@@ -176,8 +176,6 @@ const price = p ? realPrice(p) : 0;
     aspect-ratio: 3 / 2;
     object-fit: cover;
     border-radius: var(--radius-lg);
-    outline: var(--outline-image);
-    outline-offset: -1px;
   }
   .datos { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-4); }
   .precio { margin: 0; font-weight: 700; font-size: var(--text-data-lg); color: var(--accent); }
@@ -207,15 +205,27 @@ const price = p ? realPrice(p) : 0;
   .missing h1 { font-size: var(--text-display-lg); margin: 0; }
   .missing p { color: var(--muted); margin: 0; }
 
-  /* One A4 sheet, portrait. Physical units live only here: a printer
-     measures paper, and the page box is the one place CSS speaks its unit. */
+  /* One A4 sheet, portrait. Physical units live only here and in the print
+     block below: a printer measures paper, so the sheet is budgeted in the
+     paper's own unit. 297mm minus two 12mm margins leaves 273mm; the poster
+     takes 271mm (rounding slack) and the photo absorbs whatever the title,
+     the facts and the QR leave, so a long title shrinks the photo instead
+     of pushing the agency line onto a second sheet. */
   @page { size: A4 portrait; margin: 12mm; }
   @media print {
     .acciones { display: none; }
     :global(main:has(.cartel)) { padding: 0; max-width: none; }
-    .cartel { max-width: none; gap: var(--space-3); break-inside: avoid; }
+    .cartel {
+      max-width: none;
+      height: 271mm;
+      overflow: hidden;
+      gap: var(--space-3);
+      break-inside: avoid;
+      align-content: space-between;
+    }
+    .cartel:has(.foto) { grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
     .cabecera h1 { -webkit-line-clamp: 2; line-clamp: 2; }
-    .foto { max-height: 32vh; }
-    .qr { width: 45%; }
+    .foto { height: 100%; min-height: 0; max-height: none; aspect-ratio: auto; }
+    .qr { width: min(45%, 80mm); }
   }
 </style>

@@ -58,7 +58,7 @@ const { locale, propertyId, title } = Astro.props;
   import { create } from '../lib/pb';
   import { localeFromPath, t } from '../lib/i18n';
   import { loadBusiness } from '../lib/negocio';
-  import { leadOrigin } from '../lib/lead-origin.mjs';
+  import { decideOrigin, leadOrigin, originKey as keyOf } from '../lib/lead-origin.mjs';
 
   const root = document.querySelector<HTMLElement>('[data-lead]');
   if (root) {
@@ -74,15 +74,16 @@ const { locale, propertyId, title } = Astro.props;
     // this property while the tab lives, even after the URL loses its query
     // (a reload from the history, a detour to the catalogue and back).
     const propertyId = form.querySelector<HTMLInputElement>('input[name="propiedad"]')?.value ?? '';
-    const originKey = `origen:${propertyId}`;
+    const originKey = keyOf(propertyId);
     const remember = () => {
       try {
         if (leadOrigin(location.search) === 'cartel') sessionStorage.setItem(originKey, 'cartel');
       } catch { /* storage refused: the query alone still decides below */ }
     };
-    const originOf = (): 'cartel' | 'web' => {
-      if (leadOrigin(location.search) === 'cartel') return 'cartel';
-      try { return sessionStorage.getItem(originKey) === 'cartel' ? 'cartel' : 'web'; } catch { return 'web'; }
+    const originOf = () => {
+      let stored: string | null = null;
+      try { stored = sessionStorage.getItem(originKey); } catch { /* storage refused: the URL alone decides */ }
+      return decideOrigin(location.search, stored);
     };
     remember();
 

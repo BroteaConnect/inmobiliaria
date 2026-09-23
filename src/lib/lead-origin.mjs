@@ -20,3 +20,19 @@ export function leadOrigin(search) {
     return 'web';
   }
 }
+
+/** @param {string} propertyId the sessionStorage key a poster visit is remembered under */
+export const originKey = (propertyId) => `origen:${propertyId}`;
+
+/**
+ * The origin a lead is saved with: the poster when this URL says so, or when
+ * this tab arrived through the poster earlier (`stored`, the value remembered
+ * under `originKey`); the website otherwise.
+ *
+ * @param {string} search `location.search` at submit time
+ * @param {string | null | undefined} stored the remembered value, if any
+ * @returns {'cartel' | 'web'}
+ */
+export function decideOrigin(search, stored) {
+  return leadOrigin(search) === POSTER_ORIGIN || stored === POSTER_ORIGIN ? POSTER_ORIGIN : 'web';
+}
