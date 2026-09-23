@@ -25,8 +25,8 @@
 //     campaign's `estado` is left exactly as it was.
 import {
   ESTADOS_ACTIVOS, MAX_ENLACES_FALLIDOS, RECHAZOS_DE_RUN, RUNS_SIN_ENVIO_PARA_PAUSAR, SegmentoInvalido,
-  aplicarEnvio, aplicarRechazo, cerrarInforme, cuotaDelRun, esRechazoAmbiguo, esRechazoDeCredencial,
-  evaluarSegmento, informeInicial,
+  aplicarEnvio, aplicarRechazo, cerrarInforme, cuotaDelRun, esRechazoAmbiguo, esRechazoDeConfiguracion,
+  esRechazoDeCredencial, evaluarSegmento, informeInicial,
   payloadCompletada, pendientes, plantillaLista, textoCampanaArmada, textoCampanaBloqueada,
   textoCampanaCompletada, textoCampanaPausada, variablesPara,
 } from './campanas.lib.mjs';
@@ -56,11 +56,14 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
   /**
    * One chassis call. Returns:
    *   { ok: true, status, envio_id, actividad_id }        the message left
-   *   { ok: false, status, code, json }                    it answered "no"
+   *   { ok: false, status, code, json, estructurado }      it answered "no"
    *   { ambiguo: true, code }                              it never answered
-   * `json` says whether the answer was the chassis's own ({ok}/{error}) or
-   * something in front of it — a Traefik or Coolify error page during a
+   * `json` says whether the answer came from the chassis — its own
+   * `{ok}`/`{error}` shape, or at least a JSON content-type — rather than from
+   * something in front of it, a Traefik or Coolify error page during a
    * redeploy. The difference decides whether a 5xx may have been sent.
+   * `estructurado` says the refusal carried a real per-lead `error.code`,
+   * which is what tells a lead's 403 from the secret gate's.
    * The URL carries the secret and is therefore NEVER logged: the route and
    * the status are what a diagnostic needs.
    */
@@ -89,10 +92,17 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
       };
     }
     const suyo = body != null && typeof body === 'object' && ('error' in body || 'ok' in body);
+    // A truncated or unparseable body that still CLAIMS to be JSON came from
+    // the chassis, not from a gateway: it counts as its answer, so a 5xx there
+    // stays ambiguous instead of being retried into a duplicate.
+    const diceJson = String(res.headers.get('content-type') ?? '').includes('json');
     const code = body?.error?.code
       || (typeof body?.error === 'string' ? body.error : null)
       || `http_${res.status}`;
-    return { ok: false, status: res.status, code: String(code).slice(0, 60), json: suyo };
+    return {
+      ok: false, status: res.status, code: String(code).slice(0, 60),
+      json: suyo || diceJson, estructurado: Boolean(body?.error?.code),
+    };
   };
 
   // -- the data, read once ----------------------------------------------------
@@ -120,19 +130,29 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
 
   const enviosDe = (id) => pb.collection('envios').getFullList({ filter: `campana = "${id}"` });
 
-  /** Write the blockage, tell Telegram at most once a Madrid day, change no state. */
-  const bloquear = async (campana, informe, bloqueo) => {
+  // A blockage is recorded in the informe and said at most once a Madrid day.
+  // The two halves are separate so a caller that is about to write the campaign
+  // row anyway does not write it twice — an extra write is an extra chance to
+  // fail, and failing between two writes is how a provable non-send turned
+  // into a permanent `dudoso`.
+  const marcarBloqueo = (informe, bloqueo) => {
     const previo = informe.bloqueo;
     const avisar = !previo || previo.code !== bloqueo.code || previo.avisado_dia !== hoy;
     const nuevo = { ...bloqueo, en: now.toISOString(), avisado_dia: avisar ? hoy : previo.avisado_dia };
-    const out = { ...informeInicial(informe), bloqueo: nuevo };
-    await escribir(() => pb.collection('campanas').update(campana.id, { informe: out }));
+    return { informe: { ...informeInicial(informe), bloqueo: nuevo }, avisar, bloqueo: nuevo };
+  };
+  const avisarBloqueo = async (campana, bloqueo, avisar) => {
     log(`campanas: ${campana.nombre}: blocked (${bloqueo.code})`);
-    if (avisar) {
-      await event('campana.error', { campana_id: campana.id, nombre: campana.nombre, code: bloqueo.code, motivo: bloqueo.motivo });
-      await notify(textoCampanaBloqueada({ campana, bloqueo: nuevo }));
-    }
-    return out;
+    if (!avisar) return;
+    await event('campana.error', { campana_id: campana.id, nombre: campana.nombre, code: bloqueo.code, motivo: bloqueo.motivo });
+    await notify(textoCampanaBloqueada({ campana, bloqueo }));
+  };
+  /** Write the blockage, tell Telegram at most once a Madrid day, change no state. */
+  const bloquear = async (campana, informe, bloqueo) => {
+    const marcado = marcarBloqueo(informe, bloqueo);
+    await escribir(() => pb.collection('campanas').update(campana.id, { informe: marcado.informe }));
+    await avisarBloqueo(campana, marcado.bloqueo, marcado.avisar);
+    return marcado.informe;
   };
 
   // -- drafts: a preview, never a send ---------------------------------------
@@ -223,7 +243,10 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
       // ledger alone would undercount a send whose envios row the chassis
       // never managed to write, and two reports of one campaign disagreeing
       // is worse than either number.
-      enviados: String(Math.max(envios.filter((e) => e.estado !== 'error').length, informe.enviados_ids?.length ?? 0)),
+      // informe.enviados is already reconciled by cerrarInforme (the union of
+      // the ledger and enviados_ids, by lead). Recomputing it here is how the
+      // Telegram line and the manager's WhatsApp came to disagree.
+      enviados: String(informe.enviados ?? 0),
       entregados: String(envios.filter((e) => ['entregado', 'abierto', 'click'].includes(e.estado)).length),
       respuestas: String(respuestas),
       bajas: String(bajas),
@@ -402,18 +425,30 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
         break;
       }
 
-      if (!r.ok && esRechazoDeCredencial(r)) {
-        // The shared secret is wrong or rotated. That is true for every
-        // recipient, so treating it per lead would terminally exclude the
-        // whole cartera and "complete" a campaign that wrote to nobody.
-        informe = await bloquear(campana, informe, {
-          code: 'chasis_no_autorizado',
-          motivo: `el chasis rechazó la credencial (HTTP ${r.status}): revisa OUTBOUND_SECRET en ~/.config/brotea/jobs-<slug>.env`, // lang-sweep: allow
-        });
-        // The recipient never left our hands: nothing was sent, so it goes
-        // back to pending rather than staying in flight.
-        informe = { ...informe, en_vuelo: informe.en_vuelo.filter((e) => e.lead !== lead.id) };
-        await escribir(() => pb.collection('campanas').update(campana.id, { informe }));
+      if (!r.ok && (esRechazoDeCredencial(r) || esRechazoDeConfiguracion(r))) {
+        // Neither the secret nor the chassis's own configuration is a property
+        // of this lead: both answers are identical for every recipient, and
+        // both are raised before anything is handed to a provider. Treated per
+        // lead they would spend the cartera's retries and then file everyone
+        // as `agotado` — terminal, never retried — while the Telegram line
+        // blamed the segment. So: nobody's state changes, and the campaign
+        // says which of the two it is.
+        const credencial = esRechazoDeCredencial(r);
+        // The recipient never left our hands, so it goes back to pending
+        // rather than staying in flight. Built BEFORE the blockage is written,
+        // so there is exactly one write: failing between two writes is what
+        // would leave a lead in flight that nothing was ever sent to, and the
+        // next run would file it as an unretryable `dudoso`.
+        const sinEnVuelo = { ...informe, en_vuelo: informe.en_vuelo.filter((e) => e.lead !== lead.id) };
+        informe = await bloquear(campana, sinEnVuelo, credencial
+          ? {
+            code: 'chasis_no_autorizado',
+            motivo: `el chasis rechazó la credencial (HTTP ${r.status}, ${r.code}): revisa OUTBOUND_SECRET en ~/.config/brotea/jobs-<slug>.env`, // lang-sweep: allow
+          }
+          : {
+            code: 'chasis_no_configurado',
+            motivo: `el chasis dice que no está configurado (HTTP ${r.status}, ${r.code}): no ha enviado nada y hay que arreglarlo en el chasis`, // lang-sweep: allow
+          });
         abortado = true;
         break;
       }
@@ -505,6 +540,7 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
     }
 
     let estado = campana.estado;
+    let bloqueoPendiente = null;
     if (completada) {
       estado = 'completada';
       // Sent once, ever. If the closing write below fails, the next run
@@ -526,7 +562,24 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
           }
         }
       }
-    } else if (!abortado && informe.runs_sin_envio >= RUNS_SIN_ENVIO_PARA_PAUSAR) {
+    } else if (!abortado && nadaEnviadoConDudas && quedan.length === 0) {
+      // Nobody is left, nobody was written to, and there are sends we could
+      // not resolve. Recorded as a blockage — NEVER as an early return: the
+      // transport alarm at the end of this function has to fire, or a job that
+      // has stopped working looks like a job that had nothing to do.
+      const marcado = marcarBloqueo(informe, {
+        code: 'nada_enviado',
+        motivo: `la campaña terminó sin enviar nada y con ${informe.dudosos.length} envío(s) sin resolver; revisa el chasis antes de reanudarla`, // lang-sweep: allow
+      });
+      informe = marcado.informe;
+      bloqueoPendiente = marcado;
+    }
+
+    // The pause is decided after the blockage above, so the reason it carries
+    // is the real one. Three runs that sent nothing is a campaign nobody is
+    // going to fix by waiting: it pauses, with instructions, instead of
+    // re-blocking every hour for ever.
+    if (!completada && !abortado && informe.runs_sin_envio >= RUNS_SIN_ENVIO_PARA_PAUSAR) {
       estado = 'pausada';
       informe = {
         ...informe,
@@ -538,14 +591,8 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
       };
     }
 
-    if (!completada && !abortado && nadaEnviadoConDudas && quedan.length === 0) {
-      return bloquear(campana, informe, {
-        code: 'nada_enviado',
-        motivo: `la campaña terminó sin enviar nada y con ${informe.dudosos.length} envío(s) sin resolver; revisa el chasis antes de reanudarla`, // lang-sweep: allow
-      });
-    }
-
     await escribir(() => pb.collection('campanas').update(campana.id, { informe, ...(estado !== campana.estado ? { estado } : {}) }));
+    if (bloqueoPendiente) await avisarBloqueo(campana, bloqueoPendiente.bloqueo, bloqueoPendiente.avisar && estado !== 'pausada');
 
     if (completada) {
       const payload = payloadCompletada({ campana, plantilla, informe });
@@ -558,6 +605,11 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
       log(`campanas: ${campana.nombre}: paused after ${informe.runs_sin_envio} run(s) with nothing sent`);
     }
 
+    // The alarm, and the only exit from here. Every other `return` in this
+    // function is ABOVE the send loop, where fallosTransporte is necessarily
+    // empty; nothing below the loop may return before this line. A run that
+    // has stopped working must never look like a run with nothing to do —
+    // that is what tells Alertas, and what opens the three-strike circuit.
     if (fallosTransporte.length) throw new Error(`campanas: ${campana.nombre}: the chassis did not answer for ${fallosTransporte.length} send(s): ${fallosTransporte.join(', ')}`);
     return informe;
   };

@@ -309,26 +309,53 @@ rewritten after every single send, and the next run repairs it first.
 | answer | what the job does |
 |---|---|
 | `no_email`, `no_phone`, `no_consent`, `consent_revoked`, `template_not_approved`, `outside_window`, any other 4xx | terminal for that lead: `informe.excluidos`, and the campaign can complete |
-| `chassis_timeout`, `chassis_unreachable`, `provider_unavailable`, 429, Twilio `63018`, `not configured` / `smtp not configured` / `pocketbase not configured` | retryable, because the chassis said in so many words that nothing left: stays pending, `informe.reintentos[lead]++`, given up as `agotado` at 3 |
+| `chassis_timeout`, `chassis_unreachable`, `provider_unavailable`, 429, Twilio `63018` | retryable, because the chassis said in so many words that nothing left: stays pending, `informe.reintentos[lead]++`, given up as `agotado` at 3 |
 | `variables_missing` | terminal for the RUN: the same values are built for everybody, so one bug must not burn ten leads |
-| **401 / 403** with no per-lead code | terminal for the RUN: `informe.bloqueo = { code: 'chasis_no_autorizado' }`, nobody is excluded, no state changes |
+| **401 / 403** in the secret gate's bare shape (`{error: '…'}`, no `error.code`) | terminal for the RUN: `informe.bloqueo = { code: 'chasis_no_autorizado' }`, nobody is excluded, no state changes |
+| **`… not configured`** (`not configured`, `smtp not configured`, `pocketbase not configured`, `outbound email not configured`) | terminal for the RUN: `chasis_no_configurado`. Same reasoning as the credential — a guard clause raised for every recipient alike, before any provider call |
 | `send failed`, and any unnamed 5xx **the chassis itself produced** | ambiguous, treated exactly like silence (below) |
 | a 5xx that is *not* chassis JSON (a Traefik/Coolify page mid-redeploy) | retryable: nothing ever reached the mailer |
 | no answer at all | the entry stays in flight, the run **fails** so Alertas hears, and the next run adopts it or files it as `dudoso` |
 
-Two of those rows are the ones that cost real money. **Authentication is a
-property of the run, not of a lead**: the shared secret travels in the query
-string, so a rotated one answers 403 for every recipient — classified per lead
-it would file the whole cartera as terminally excluded, "complete" a campaign
-that wrote to nobody, and leave no way back but editing the `informe` by hand.
-A wrong credential is the same class of problem as a missing one, and blocks
-the same way. And **ambiguity is narrow on purpose**: only a 5xx the chassis
-wrote itself, with no code we know, may have been sent. Its `… not configured`
-answers and an infrastructure error page are known non-sends, and treating them
-as maybes would lose every recipient to `dudoso` — permanently — for a
-redeploy. As a last guard, a campaign that reaches the end having sent
-**nothing** while holding unresolved sends is blocked (`nada_enviado`) rather
-than completed: quiet failure must not look like success.
+The rows that cost real money are the ones about the chassis rather than about
+a person. **A credential and a configuration are properties of the run**: the
+shared secret travels in the query string, so a rotated one answers 403 to
+every recipient, and a container that boots with half an environment answers
+`smtp not configured` to every recipient. Classified per lead, the first files
+the whole cartera as terminally excluded and the second spends everybody's
+three retries and then writes them off as `agotado` — in both cases the
+campaign "completes" having written to nobody, with no way back but editing the
+`informe` by hand, and the Telegram line blames the segment. Both block the
+campaign instead, naming which one it is, and change nobody's state. The
+credential rule requires the secret gate's *bare* shape — a sentence with no
+`error.code` — so that a Traefik or WAF 403, or a future per-lead refusal
+shipped as a 403 with a proper code, is not mistaken for our secret being wrong.
+
+**Ambiguity is narrow on purpose**: only a 5xx the chassis wrote itself (its
+own `{ok}`/`{error}` shape, or at least a JSON content-type), with no code we
+know, may have been sent. An infrastructure error page is a known non-send.
+Two things worth knowing about that line:
+
+- A 5xx that is not JSON is retried, so there is a narrow window where the
+  chassis dies *after* the mail is accepted and the gateway answers HTML: the
+  orphan `envios` row carries no `campana`, and the retry sends a second copy.
+  The content-type check shrinks it; nothing available from outside closes it.
+- The chassis's catch-all `500 {error:'internal error'}` is, today, a provable
+  non-send — every uncaught throw on both routes happens before the provider
+  call. It is still treated as ambiguous, deliberately: that proof is an audit
+  of throw sites, which one `await` added after a send would invalidate, while
+  the proof for 401/403 and `… not configured` is a guard clause that cannot be
+  reached after a send. A lost lead shows up in `informe.dudosos` and in the
+  Telegram report, where a human can act on it; a second message to a real
+  person cannot be undone.
+
+As a last guard, a campaign that reaches the end having sent **nothing** while
+holding unresolved sends is blocked (`nada_enviado`) rather than completed:
+quiet failure must not look like success. That blockage is recorded, never
+returned early — the transport alarm at the end of the run has to fire, or
+`run-jobs` records a green run, Alertas is never told and the three-strike
+circuit never opens. After three runs that sent nothing the campaign pauses
+(carrying that reason) instead of re-blocking every hour for ever.
 
 Only a chassis that never answered — or answered ambiguously — makes `run()`
 throw. Business refusals never do: three throws in one Madrid day open the

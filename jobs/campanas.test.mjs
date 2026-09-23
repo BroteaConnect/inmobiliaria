@@ -337,6 +337,29 @@ describe('the same person is never written to twice', () => {
 });
 
 describe('an answer about us is never an answer about a lead', () => {
+  it('a silent chassis fails the run even when nothing was sent', async () => {
+    // The regression: a run that hit a transport failure AND ended with
+    // nothing sent used to return normally, so run-jobs recorded a green run,
+    // Alertas heard nothing and the 3-strike circuit never opened. A job that
+    // has stopped working must never look like a job with nothing to do.
+    const pb = fakePb(datosBase());
+    pb.store.leads.push({ ...leadUno, id: 'lead000000002' });
+    pb.store.campanas[0].segmento = { v: 1, incluye_ids: [leadUno.id, 'lead000000002'], max: 2, variables: { municipio: 'Madrid', url: 'https://x.dev' } };
+    pb.store.campanas[0].lote_diario = 2;
+    conChasis(() => { const e = new Error('socket hang up'); e.name = 'TypeError'; throw e; });
+
+    const primera = contexto(pb);
+    await assert.rejects(run(primera.ctx), /did not answer/);
+    // Second run: the first lead becomes `dudoso`, the second is attempted and
+    // the chassis is still silent. Nothing has been sent by anyone.
+    const segunda = contexto(pb);
+    await assert.rejects(run(segunda.ctx), /did not answer/, 'the alarm must survive the nada_enviado blockage');
+    const informe = pb.store.campanas[0].informe;
+    assert.equal(informe.enviados, 0);
+    assert.ok(informe.dudosos.length >= 1);
+    assert.notEqual(pb.store.campanas[0].estado, 'completada');
+  });
+
   it('a rotated shared secret blocks the run and excludes nobody', async () => {
     const pb = fakePb(datosBase());
     // What the chassis's secret gate actually answers: a bare sentence, no code.
@@ -352,6 +375,12 @@ describe('an answer about us is never an answer about a lead', () => {
     assert.deepEqual(informe.en_vuelo, [], 'nothing left our hands, so nothing is in flight');
     assert.equal(pb.store.campanas[0].estado, 'programada');
     assert.match(mensajes[0], /Campaña bloqueada/);
+    // No write ever carries the blockage together with a lead still in flight.
+    // Two writes, with the stale one first, is how a provable non-send became
+    // a permanent `dudoso` when the second one failed.
+    const conBloqueo = pb.escrituras.filter((w) => w.coleccion === 'campanas' && w.body?.informe?.bloqueo?.code === 'chasis_no_autorizado');
+    assert.ok(conBloqueo.length >= 1);
+    for (const w of conBloqueo) assert.deepEqual(w.body.informe.en_vuelo, [], 'a blocked run leaves nothing in flight');
 
     // And once the secret is fixed, the same lead is written to normally.
     conChasis(() => respuesta(200, { ok: true, envio_id: null, activity_id: null }));
@@ -362,24 +391,39 @@ describe('an answer about us is never an answer about a lead', () => {
     assert.equal(pb.store.campanas[0].estado, 'completada');
   });
 
-  it('a chassis that says it is not configured leaves every lead retryable', async () => {
+  it('a chassis that says it is not configured blocks the run and spends nobody\'s retries', async () => {
     const pb = fakePb(datosBase());
+    // What a container that booted with half an environment answers.
     conChasis(() => respuesta(503, { error: 'smtp not configured' }));
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 4; i++) {
       const { ctx } = contexto(pb);
       await run(ctx);
     }
     const informe = pb.store.campanas[0].informe;
+    assert.equal(informe.bloqueo.code, 'chasis_no_configurado');
+    assert.match(informe.bloqueo.motivo, /smtp not configured/);
     assert.deepEqual(informe.dudosos, [], 'a 503 that never reached the mailer is not a maybe-send');
-    assert.equal(informe.reintentos[leadUno.id], 2);
-    assert.equal(informe.rechazos['smtp not configured'], 2);
+    assert.deepEqual(informe.reintentos, {}, 'four runs must not spend a lead\'s three chances');
+    assert.deepEqual(informe.excluidos, [], 'and must never leave anyone as agotado');
     assert.notEqual(pb.store.campanas[0].estado, 'completada');
 
-    // The configuration comes back before the third strike: nobody was lost.
+    // The configuration comes back: nobody was lost.
     conChasis(() => respuesta(200, { ok: true, envio_id: null, activity_id: null }));
-    const tercera = contexto(pb);
-    await run(tercera.ctx);
+    const despues = contexto(pb);
+    await run(despues.ctx);
     assert.deepEqual(pb.store.campanas[0].informe.enviados_ids, [leadUno.id]);
+  });
+
+  it('a 403 that carries a real per-lead code refuses one lead, not the campaign', async () => {
+    // The chassis's auth contract is changing: a future per-lead refusal
+    // shipped as 403 with a proper code must not read as "our secret is wrong".
+    const pb = fakePb(datosBase());
+    conChasis(() => respuesta(403, { ok: false, error: { code: 'no_consent', text: 'sin consentimiento' } }));
+    const { ctx } = contexto(pb);
+    await run(ctx);
+    const informe = pb.store.campanas[0].informe;
+    assert.equal(informe.bloqueo, null);
+    assert.deepEqual(informe.excluidos.map((e) => e.code), ['no_consent']);
   });
 
   it('a gateway 502 during a redeploy is retryable, not a maybe-send', async () => {
@@ -519,15 +563,23 @@ describe("the manager's report", () => {
       if (url.includes('/send-whatsapp')) return respuesta(200, { ok: true, envio_id: 'envG', actividad_id: 'actG', mensaje_id: 'SM1' });
       return respuesta(200, { ok: true, envio_id: null, activity_id: null });
     });
+    // One send lands only in the ledger and another only in the informe: the
+    // union is 2, and comparing two lengths would have said 1.
+    // Yesterday, so it does not spend today's batch — the ledger is what the
+    // daily quota counts.
+    pb.store.envios.push({ id: 'envOtro', lead: 'lead000000009', plantilla: plantillaEmail.id, campana: campanaBase.id, estado: 'enviado', enviado_en: '2026-09-22 09:00:00.000Z', created: '2026-09-22 09:00:00.000Z' });
     const { ctx } = contexto(pb);
     await run(ctx);
     const informe = pb.store.campanas[0].informe;
     assert.equal(informe.informe_manager.estado, 'enviado');
+    assert.equal(informe.enviados, 2);
     const reporte = llamadas.find((l) => l.url.includes('/send-whatsapp'));
     assert.equal(reporte.body.plantilla, 'campana.informe');
     assert.deepEqual(reporte.body.variables, {
-      campana: 'Ensayo', enviados: '1', entregados: '0', respuestas: '0', bajas: '0', errores: '0',
+      campana: 'Ensayo', enviados: '2', entregados: '0', respuestas: '0', bajas: '0', errores: '0',
     });
+    // The two reports of one campaign must never disagree.
+    assert.equal(reporte.body.variables.enviados, String(informe.enviados));
   });
 });
 

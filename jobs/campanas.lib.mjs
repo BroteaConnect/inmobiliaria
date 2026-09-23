@@ -328,8 +328,18 @@ export const RECHAZOS_TERMINALES = [
 // exactly that, and filing those leads as "maybe sent" would lose them for good.
 export const RECHAZOS_REINTENTABLES = [
   'chassis_timeout', 'chassis_unreachable', 'provider_unavailable', 'ledger_unavailable', '63018',
+  ...['not configured', 'smtp not configured', 'pocketbase not configured', 'outbound email not configured'],
+];
+// …and those four are a property of the RUN, not of a lead, for the same
+// reason a rotated secret is: the chassis raises them for every recipient
+// alike, before anything is handed to a provider (they are guard clauses at
+// the top of both handlers). Spent per lead they would burn the cartera's
+// three retries and file everybody as `agotado` — terminal, never retried —
+// over a container that booted with half an environment.
+export const RECHAZOS_DE_CONFIGURACION = [
   'not configured', 'smtp not configured', 'pocketbase not configured', 'outbound email not configured',
 ];
+export const esRechazoDeConfiguracion = ({ code } = {}) => RECHAZOS_DE_CONFIGURACION.includes(String(code ?? ''));
 // AMBIGUOUS: the chassis answered "no" AFTER the message may already have
 // gone. `/send-email` returns 502 `send failed` whenever sendTrackedEmail
 // throws — and it can throw on the `actividades` POST or the `leads` PATCH,
@@ -354,12 +364,18 @@ export const RECHAZOS_DE_RUN = ['variables_missing'];
 
 /**
  * True when the answer is about US and not about this lead: a rotated or
- * missing shared secret. `code` only disqualifies it if it is a refusal the
- * chassis raises per lead, because the secret gate answers a bare
- * `{error: 'forbidden'}` with no code at all.
+ * missing shared secret.
+ *
+ * It requires the BARE shape the secret gate answers with — `{error: '…'}`, a
+ * sentence and no `error.code` — rather than any 401/403. Two reasons, and the
+ * second is why `estructurado` exists at all: a Traefik or WAF 403 is not our
+ * secret and should not claim to be, and the chassis's auth contract is
+ * changing this week, so a *new* per-lead refusal shipped as 403 with a proper
+ * code must refuse one lead and not block the whole campaign.
  */
-export function esRechazoDeCredencial({ code, status } = {}) {
+export function esRechazoDeCredencial({ code, status, estructurado = false } = {}) {
   if (!ESTADOS_DE_CREDENCIAL.includes(Number(status))) return false;
+  if (estructurado) return false;
   return !RECHAZOS_TERMINALES.includes(String(code ?? ''));
 }
 
@@ -375,13 +391,24 @@ export function esRechazoDeCredencial({ code, status } = {}) {
  * is genuinely ambiguous. Unknown shape defaults to ambiguous: never send
  * twice is the safer of the two mistakes.
  */
-export function esRechazoAmbiguo({ code, status, json = true } = {}) {
+export function esRechazoAmbiguo({ code, status, json = true, estructurado = false } = {}) {
   const c = String(code ?? '');
   if (RECHAZOS_AMBIGUOS.includes(c)) return true;
   if (RECHAZOS_TERMINALES.includes(c) || RECHAZOS_REINTENTABLES.includes(c)) return false;
-  if (esRechazoDeCredencial({ code, status })) return false;
+  if (esRechazoDeCredencial({ code, status, estructurado })) return false;
   return json && (Number(status) || 0) >= 500;
 }
+
+// A note left on purpose, because it is a decision and not an oversight:
+// the chassis's catch-all `500 {error:'internal error'}` is, today, a provable
+// non-send — every uncaught throw on both routes happens before the provider
+// call, since the provider call has its own catch that answers 502. It is
+// still classified ambiguous. The proof for 401/403 and for `not configured`
+// is structural (a guard clause that cannot be reached after a send); the
+// proof for 500 is an audit of every throw site, which is exactly the kind of
+// proof one `await` added after the provider call would silently invalidate.
+// A lost lead is visible in `informe.dudosos`, reported to Telegram, and a
+// human can act on it; a second message to a real person cannot be undone.
 
 /** True when this refusal will never resolve by trying again. */
 export function esRechazoTerminal({ code, status } = {}) {
