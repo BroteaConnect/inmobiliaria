@@ -162,7 +162,7 @@ and rewritten with `history.replaceState` on every `input` / `change`, so
 a filtered view is a link an agent can send, nothing reloads and nothing is
 fetched again. Filtering is a `hidden` toggle on `[data-card]`
 (`data-town` raw as PocketBase wrote it, `data-price`, `data-rooms`); a
-zero price hides under any bound because a zero is not a price. The count
+zero price hides under any bound because a zero is not a price, and a zero bound is no bound at all (ArrowDown in an empty box must not empty the page). A town or a rooms value in the URL that matches no chip is dropped from the address on first paint, so URL, controls and cards always agree. The count
 (`filters.count`, plural) and the filtered-empty line (`filters.empty`,
 distinct from `catalog.empty`) are both locale keys. `submit` is prevented
 (Enter in a number input would GET-navigate) and the clear control is a

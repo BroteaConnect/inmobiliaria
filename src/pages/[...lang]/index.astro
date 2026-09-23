@@ -109,11 +109,13 @@ const ROOMS = [1, 2, 3, 4];
     interface Filters { town: string; min: number | null; max: number | null; rooms: number | null }
 
     const fold = (s: string) => s.trim().toLocaleLowerCase();
-    // A price bound: a non-negative number, or nothing. Anything else is nothing.
+    // A price bound: a positive number, or nothing. Zero is nothing too: a
+    // keyboard user who taps ArrowDown in an empty box gets 0, and "at most
+    // nothing" would empty the catalogue instead of leaving it alone.
     const bound = (v: string | null | undefined): number | null => {
       if (v == null || v.trim() === '') return null;
       const n = Number(v);
-      return Number.isFinite(n) && n >= 0 ? n : null;
+      return Number.isFinite(n) && n > 0 ? n : null;
     };
     // Rooms: a whole number of at least one, or nothing ("any").
     const roomsOf = (v: string | null | undefined): number | null => {
@@ -144,9 +146,21 @@ const ROOMS = [1, 2, 3, 4];
       history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
     }
 
+    // The count is a live region: cards move on every keystroke, the sentence
+    // is read once the typing settles. Milliseconds; not CSS motion.
+    const COUNT_SETTLE = 300;
+    let countTimer: ReturnType<typeof setTimeout> | undefined;
+    function announce(total: number, shown: number, now: boolean) {
+      clearTimeout(countTimer);
+      const write = () => { countLine.textContent = total ? _('filters.count', { count: shown }) : ''; };
+      if (now) write(); else countTimer = setTimeout(write, COUNT_SETTLE);
+    }
+
     // A zero price is not a price (Design Read, tell 10): under any bound it
     // hides, because nobody can say whether "on request" is within budget.
-    function applyFilters(f: Filters) {
+    // `now` writes the count in the same task (first paint); a change from a
+    // control lets it settle.
+    function applyFilters(f: Filters, now = false) {
       const cards = cat.querySelectorAll<HTMLElement>('[data-card]');
       let shown = 0;
       cards.forEach((c) => {
@@ -160,8 +174,8 @@ const ROOMS = [1, 2, 3, 4];
         c.hidden = !ok;
         if (ok) shown += 1;
       });
-      countLine.textContent = cards.length ? _('filters.count', { count: shown }) : '';
       emptyLine.hidden = !(cards.length && shown === 0);
+      announce(cards.length, shown, now);
     }
 
     // One chip per distinct town, built once from the list (render() runs
@@ -192,20 +206,29 @@ const ROOMS = [1, 2, 3, 4];
       }
     }
 
-    // The controls show what the URL says. `.checked`, never `defaultChecked`,
-    // so form.reset() still returns to "any town, any rooms, no bounds".
-    function syncControls(f: Filters) {
+    // The controls show what the URL says, and the URL says only what a
+    // control can show: a town that matches no chip and a rooms value with no
+    // chip fall away, so the address, the form and the cards agree from the
+    // first paint on (the form, not the URL, is read at the next change).
+    // `.checked`, never `defaultChecked`, so form.reset() still returns to
+    // "any town, any rooms, no bounds". Returns the reconciled state.
+    function syncControls(f: Filters): Filters {
       const towns = form.querySelectorAll<HTMLInputElement>('input[name="municipio"]');
-      let hit = false;
+      let town = '';
       towns.forEach((r) => {
-        const on = r.value !== '' && (r.value === f.town || fold(r.value) === fold(f.town));
+        const on = r.value !== '' && !town && (r.value === f.town || fold(r.value) === fold(f.town));
         r.checked = on;
-        hit ||= on;
+        if (on) town = r.value;
       });
-      if (!hit && towns[0]) towns[0].checked = !f.town;
+      if (!town && towns[0]) towns[0].checked = true;
+      let rooms: number | null = null;
+      form.querySelectorAll<HTMLInputElement>('input[name="hab"]').forEach((r) => {
+        r.checked = Number(r.value) === f.rooms;
+        if (r.checked) rooms = f.rooms;
+      });
       (form.elements.namedItem('min') as HTMLInputElement).value = f.min === null ? '' : String(f.min);
       (form.elements.namedItem('max') as HTMLInputElement).value = f.max === null ? '' : String(f.max);
-      form.querySelectorAll<HTMLInputElement>('input[name="hab"]').forEach((r) => { r.checked = Number(r.value) === f.rooms; });
+      return { town, min: f.min, max: f.max, rooms };
     }
 
     const onChange = () => { const f = filtersFromForm(); writeUrl(f); applyFilters(f); };
@@ -250,9 +273,10 @@ const ROOMS = [1, 2, 3, 4];
       // Same task as the cards: the first frame that has them is already
       // filtered, so a shared link never flashes the whole catalogue first.
       buildTownChips();
-      const f = readFilters();
-      syncControls(f);
-      applyFilters(f);
+      const asked = readFilters();
+      const f = syncControls(asked);
+      if (JSON.stringify(f) !== JSON.stringify(asked)) writeUrl(f);
+      applyFilters(f, true);
     }
 
     if (pbUrl() && !compartida) {

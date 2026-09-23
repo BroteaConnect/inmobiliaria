@@ -41,8 +41,8 @@ const abs = (href: string) => (Astro.site ? new URL(href, Astro.site).href : hre
     <!-- brotea:head -->
     <meta name="pb-url" content={import.meta.env.PUBLIC_PB_URL} />
     <script is:inline defer id="brotea-errors" src="/brotea-errors.js" data-dsn={import.meta.env.PUBLIC_GLITCHTIP_DSN}></script>
-    <!-- exclude-search: the catalogue filters rewrite ?municipio=&hab= with replaceState, and a narrower view of the same page is not a new pageview. -->
-    <script is:inline defer src={import.meta.env.PUBLIC_UMAMI_SRC} data-website-id={import.meta.env.PUBLIC_UMAMI_WEBSITE_ID} data-exclude-search="true"></script>
+    <!-- exclude-search and exclude-hash: the catalogue filters rewrite ?municipio=&hab= with replaceState (keeping any #catalogo hash), and a narrower view of the same page is not a new pageview. -->
+    <script is:inline defer src={import.meta.env.PUBLIC_UMAMI_SRC} data-website-id={import.meta.env.PUBLIC_UMAMI_WEBSITE_ID} data-exclude-search="true" data-exclude-hash="true"></script>
   </head>
   <body>
     <Nav locale={locale} back={back} />

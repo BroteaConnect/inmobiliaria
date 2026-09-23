@@ -113,7 +113,6 @@
   "prop.rooms.other": "{count} habitaciones",
   "site.name": "Inmobiliaria",
   "wa.adelantar": "Adelantar por WhatsApp",
-  "wa.mensajeGeneral": "Hola, os escribo desde la web.",
   "wa.mensajePropiedad": "Hola, me interesa «{propiedad}».",
   "wa.preguntar": "Preguntar por esta casa"
 }
