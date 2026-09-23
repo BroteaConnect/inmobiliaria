@@ -9,7 +9,7 @@ datos, el seed y la documentación; el CRM vive en
 
 | Pieza | Qué es | Dónde |
 |---|---|---|
-| Escaparate | Catálogo público bilingüe (es en `/`, en en `/en/`) + captura de leads (astro, este repo) | https://inmobiliaria.brotea.dev |
+| Escaparate | Catálogo público bilingüe (es en `/`, en en `/en/`) + una página por propiedad (`/propiedad/<id>`, see [Rendering and routes](#rendering-and-routes-e3-2026-09-23)) + captura de leads (astro, este repo) | https://inmobiliaria.brotea.dev |
 | CRM | Panel privado: kanban de leads, propiedades, import CSV (react) | https://crm-inmobiliaria.brotea.dev |
 | Backend | PocketBase compartido (datos, fotos, auth, realtime) | https://pb-inmobiliaria.brotea.dev |
 | Modelo de datos | `pb/schema.json` (declarativo, aditivo) | este repo |
@@ -24,17 +24,22 @@ El escaparate es bilingüe es/en sobre el contrato i18n de la fábrica
 (rutas `[...lang]`, `t()`, `LanguageSwitcher`, gate de CI) — ver
 [docs/i18n.md](i18n.md); los datos de las propiedades (titulo,
 descripcion…) no se traducen. Los jobs programados (agenda 09:00 +
-resumen 20:00 por Telegram) en [docs/jobs.md](jobs.md).
+resumen 20:00 por Telegram) en [docs/jobs.md](jobs.md). The design brief
+every E3 pull request was judged against is [docs/design-read.md](design-read.md).
 
 ## Flujos clave
 
-- **Lead entra**: formulario del escaparate → `create('leads')` en PocketBase
+- **Lead entra**: formulario del escaparate (on the property page, with the
+  `propiedad` field preset) → `create('leads')` en PocketBase
   (regla `create` pública) **y** POST a `api.brotea.dev/requirements`
   (chasis) → aviso al topic de Telegram del proyecto. El CRM lo ve aparecer
   en tiempo real (suscripción SSE a `leads`).
 - **Propiedad se publica**: en el CRM, `estado = "publicada"` → visible en el
   catálogo al instante (el escaparate lee client-side con el filtro
-  `estado="publicada"`; no hay rebuild).
+  `estado="publicada"`; no hay rebuild). Its own page,
+  `/propiedad/<id>`, is rendered per request under the same rule, so a
+  listing published in the CRM has an address and a link preview at once,
+  with no rebuild either.
 - **Fotos**: campo `fotos` de `propiedades` (files, thumbs 600x400 servidos
   por PocketBase con `?thumb=`).
 
@@ -239,6 +244,78 @@ E1 ships the data model only. There is no campaign runner, no lead/property
 matcher and no visit booking in code yet; the rows above are written and read
 by hand (PocketBase admin or API) until the screens and jobs that use them are
 merged.
+
+## Rendering and routes (E3, 2026-09-23)
+
+The site is hybrid. `astro.config.mjs` keeps `output: 'static'` and adds the
+`@astrojs/node` adapter (`mode: 'standalone'`): every route is prerendered at
+build time and served as a static file, except the property page, which opts
+out with `export const prerender = false` and is rendered per request. `site`
+is `https://inmobiliaria.brotea.dev`, so canonical, hreflang and `og:url` are
+absolute.
+
+| Route | Rendered | What it is |
+|---|---|---|
+| `/`, `/en/` | at build | the catalogue: hero, filters and cards; the cards are fetched in the browser |
+| `/propiedad/<id>`, `/en/propiedad/<id>` | per request | one published property, with `og:` tags and JSON-LD in the HTML |
+| `/aviso-legal`, `/privacidad`, `/cookies` (and `/en/…`) | at build | the legal pages |
+
+`npm run build` writes the static files to `dist/client/` and the server to
+`dist/server/entry.mjs`; the Dockerfile runs that server on port 4321
+(`HOST=0.0.0.0`), and it serves both.
+
+**Catalogue.** The page's script fetches every published property with
+`listAll` (`src/lib/pb.ts`): pages of 500, at most 20 pages, a console
+warning if the cap is hit rather than a silent cut.
+
+```ts
+listAll<Property>('propiedades', { filter: 'estado="publicada"', sort: '-created' })
+```
+
+The list is then filtered in the browser from the URL
+(`?municipio=&min=&max=&hab=`, see [docs/frontend-ui.md](frontend-ui.md#catalogue-filters-e3-pr-3));
+no request is made when a filter changes. Links to the old side panel
+(`/?p=<id>`) still resolve: the script replaces them with the property's own
+address.
+
+**Property page** (`src/pages/[...lang]/propiedad/[id].astro`).
+`publishedProperty(id)` in `src/lib/property.server.ts` does one `GET
+/api/collections/propiedades/records/<id>` against PocketBase (5 s timeout)
+and renders only when `estado="publicada"`; the public read rule already
+answers 404 for anything else, so a draft, a reserved or a sold listing is
+indistinguishable from an unknown id. An id that is not 15 alphanumerics is
+`missing` without a round trip; a locale prefix that does not exist is a 404
+too.
+
+| Case | Status | `Cache-Control` |
+|---|---|---|
+| published | 200 | `public, max-age=60, stale-while-revalidate=300` |
+| draft / reserved / sold / unknown id / unknown locale | 404 | `no-store` |
+| PocketBase unreachable or non-2xx | 503 | `no-store` |
+
+The 404 and 503 are rendered inline with the status set (a usable page with a
+link back to the catalogue), never as an empty response. The `<head>` carries
+`og:type`, `og:site_name`, `og:title`, `og:description`, `og:image`
+(the first photo, or `/og-fallback.png`), `og:url`, `og:locale` plus one
+`og:locale:alternate` per other language, `twitter:card` and a
+`schema.org/RealEstateListing` block (`name`, `description`, `url`,
+`image[]`, `inLanguage`, `datePosted`, `offers` with `price` in AED when the
+price is above zero, `address.addressLocality`, `numberOfRooms`, `floorSize`
+in `MTK`, each only when the record has it).
+
+```bash
+curl -s https://inmobiliaria.brotea.dev/en/propiedad/$ID | grep -o '<meta property="og:title"[^>]*>'
+curl -s -o /dev/null -w '%{http_code}\n' https://inmobiliaria.brotea.dev/propiedad/$DRAFT_ID   # 404
+```
+
+`PUBLIC_PB_URL` is inlined at build time like everywhere else; the server
+route falls back to the container's own `process.env.PUBLIC_PB_URL`
+(`pbBase()`) when the runtime was built without it.
+
+**Analytics.** The Umami tag in `src/layouts/Layout.astro` runs with
+`data-exclude-search="true"` and `data-exclude-hash="true"`: the filters
+rewrite the query string with `history.replaceState` (keeping any hash), and
+a narrower view of the same page is not a new pageview.
 
 ## Deuda consciente / siguiente iteración
 
