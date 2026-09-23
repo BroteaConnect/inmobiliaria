@@ -29,6 +29,7 @@ aislamiento de fallos, reintentos) es del chasis y no se copia.
 | `jobs/campanas.mjs` | hourly | Only when a campaign pauses or completes (see [campanas](#campanas)). |
 | `jobs/matcher.mjs` | 09:30 | Shortlist de leads que encajan con cada propiedad publicada o tocada en las últimas 24 h (ver [matcher](#matcher)). |
 | `jobs/unanswered.mjs` | hourly | A lead whose WhatsApp/email has waited more than **2 h** with no outbound row, once per unanswered streak, 09:00–21:00 only (see [unanswered](#unanswered)). |
+| `jobs/weekly-summary.mjs` | Fri 18:00 | The business summary of the week, never silent (see [weekly-summary](#weekly-summary)). |
 
 **El silencio es una feature**: si no hay leads desatendidos o el día está
 vacío, no se envía nada. Un canal que solo habla cuando hay algo que decir
@@ -174,6 +175,31 @@ never alerted.
   <ISO>}}`, pruned to 7 days — the anchors already alerted. Under
   `--dry-run` it is not written (the job logs `dry-run: would write
   jobs.unanswered`).
+
+## weekly-summary
+
+`jobs/weekly-summary.mjs` (Fridays 18:00, `when = { daily: '18:00', dow: [5]
+}`; rules in `jobs/weekly-summary.lib.mjs`) covers Friday 18:00 → Friday
+18:00 on the Madrid wall clock — seven local days, 167 or 169 hours on a DST
+week. A run before Friday 18:00 (a forced rehearsal) reports the last complete
+week. `semana` is the ISO week of the closing Friday (`2026-W39`).
+
+- Counts: `leads_nuevos` (created in the week, `histórico` excluded — those
+  are `importados`), `por_origen` (empty → `sin origen`, keys cut to 40;
+  `cartel` is one more origin), `contactos` / `contactos_por_canal` (outbound
+  rows, notes excluded), `entrantes`, `visitas` (held: `cuando` in the week
+  and `realizada`), `visitas_agendadas` (booked in the week, not cancelled),
+  `visitas_no_show`, `publicadas` (published and touched in the week — a
+  proxy), `envios` `{total, por_estado}` (null when the ledger could not be
+  read), `sin_respuesta` (the unanswered rule, now) and `embudo` (leads per
+  stage **today**).
+- **No stage history**: the CRM keeps only a lead's current `etapa`, so the
+  summary cannot say "3 leads moved to oferta this week"; the funnel is a
+  snapshot. A stage-move metric needs a stage-change log first.
+- Log line, always: `weekly-summary: <n> new lead(s) this week`; then the
+  `project.weekly_summary` `{semana, desde, hasta, …counts}` event, then the
+  message. A quiet week is said (`Semana sin movimiento…`), never skipped.
+  It writes nothing to PocketBase.
 
 ## campanas
 
