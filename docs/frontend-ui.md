@@ -151,6 +151,27 @@ Merged polish (feature 44):
 - `#interes` inputs/textarea: `min-height: 44px`, `:focus-visible` outline
   and a border-color transition.
 
+## Catalogue filters (E3, PR 3)
+
+`form[data-filters]` sits between the hero and `#catalogo`: town (radio
+chips, one per distinct `municipio`, created by the script once the list
+arrives), a price range (`min` / `max` number inputs) and rooms (radio
+chips `hab` = 1..4, "n or more"; the first `[name="hab"]` in DOM order is
+value 1). The URL is the state: `?municipio=&min=&max=&hab=` is read on load
+and rewritten with `history.replaceState` on every `input` / `change`, so
+a filtered view is a link an agent can send, nothing reloads and nothing is
+fetched again. Filtering is a `hidden` toggle on `[data-card]`
+(`data-town` raw as PocketBase wrote it, `data-price`, `data-rooms`); a
+zero price hides under any bound because a zero is not a price, and a zero bound is no bound at all (ArrowDown in an empty box must not empty the page). A town or a rooms value in the URL that matches no chip is dropped from the address on first paint, so URL, controls and cards always agree. The count
+(`filters.count`, plural) and the filtered-empty line (`filters.empty`,
+distinct from `catalog.empty`) are both locale keys. `submit` is prevented
+(Enter in a number input would GET-navigate) and the clear control is a
+`type="button"` not named `hab`.
+
+Umami runs with `data-exclude-search="true"` (`Layout.astro`): the tracker
+patches `replaceState` and would otherwise send a pageview for every
+search-only change.
+
 ## Property photo gallery (feature 46)
 
 Before this feature only `fotos[0]` was ever rendered, so photos appended

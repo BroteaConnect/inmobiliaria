@@ -93,7 +93,7 @@ const { locale, back = false } = Astro.props;
     color: var(--text);
     text-decoration: none;
     padding: var(--space-2) 0;
-    transition: color 0.15s ease;
+    transition: color var(--duration-press) var(--ease-out);
   }
   .brand:hover {
     color: var(--primary);
@@ -113,7 +113,9 @@ const { locale, back = false } = Astro.props;
     font-weight: 600;
     padding: 0.4rem 0.8rem;
     border-radius: var(--radius);
-    transition: background 0.15s ease, color 0.15s ease;
+    transition-property: background, color;
+    transition-duration: var(--duration-press);
+    transition-timing-function: var(--ease-out);
   }
   nav .links :global(a:hover) {
     background: color-mix(in srgb, var(--primary) 12%, transparent);
@@ -138,7 +140,9 @@ const { locale, back = false } = Astro.props;
     border-radius: var(--radius);
     background: transparent;
     cursor: pointer;
-    transition: border-color 0.15s ease, background 0.15s ease;
+    transition-property: border-color, background;
+    transition-duration: var(--duration-press);
+    transition-timing-function: var(--ease-out);
   }
   .menu-btn:hover {
     border-color: var(--primary);
@@ -149,7 +153,9 @@ const { locale, back = false } = Astro.props;
     height: 2px;
     border-radius: 1px;
     background: var(--text);
-    transition: transform 0.18s ease, opacity 0.18s ease;
+    transition-property: transform, opacity;
+    transition-duration: var(--duration-fast);
+    transition-timing-function: var(--ease-in-out);
   }
   .menu-btn[aria-expanded='true'] .bar:nth-child(1) {
     transform: translateY(7px) rotate(45deg);
@@ -189,7 +195,7 @@ const { locale, back = false } = Astro.props;
     }
     nav .links.open {
       display: flex;
-      animation: nav-drop 0.18s ease;
+      animation: nav-drop var(--duration-enter) var(--ease-out);
     }
     nav .links :global(a) {
       display: flex;
