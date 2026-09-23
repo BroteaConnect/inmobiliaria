@@ -15,16 +15,17 @@
 //                                 text is kept: bump CATALOG_VERSION to ship it.
 // Rows on the instance that the catalog does not know are reported and never
 // touched. --dry-run prints the same lines with a " (dry-run)" suffix and
-// writes nothing. Exit codes: 0 ok, 1 instance/credentials error, 2 catalog
-// invalid (nothing contacted), 64 usage.
+// writes nothing — but it builds every body it would send and refuses one that
+// lacks a schema-required field, so a create that PocketBase would 400 fails
+// the dry-run too. Exit codes: 0 ok, 1 instance/credentials error, 2 catalog
+// invalid or a create body missing a required field, 64 usage.
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { contentOf, problems, sameContent } from './plantillas.lib.mjs';
+import { CATALOG_VERSION, createBody, missingOnCreate, problems, sameContent, updateBody } from './plantillas.lib.mjs';
 
-// The catalog's own version. Bump it when a content change must win over
-// edits made on the instance; rows whose instance version is higher are kept.
-const CATALOG_VERSION = 1;
+// CATALOG_VERSION lives in plantillas.lib.mjs next to the body builders that
+// stamp it. Bump it there when a content change must win over the instance.
 const USAGE = 'usage: node pb/plantillas.mjs [--slug <slug>] [--dry-run] [--force]';
 
 // -- flags ----------------------------------------------------------------------------
@@ -48,6 +49,14 @@ const rows = JSON.parse(readFileSync(new URL('./plantillas.json', import.meta.ur
 const invalid = problems(rows);
 if (invalid.length) {
   for (const p of invalid) console.error(`✖ plantillas: ${p}`);
+  process.exit(2);
+}
+// The bodies the seed would POST, built and checked here — before credentials,
+// before auth — so a create PocketBase would 400 fails with nothing contacted,
+// in the dry-run and in the live run alike.
+const bodyProblems = rows.flatMap((row) => missingOnCreate(createBody(row)).map((f) => `${row.clave}: create body lacks ${f}`));
+if (bodyProblems.length) {
+  for (const p of bodyProblems) console.error(`✖ plantillas: ${p}`);
   process.exit(2);
 }
 
@@ -129,11 +138,6 @@ const write = async (clave, method, url, body) => {
   }
 };
 
-const contentDefaults = (row) => {
-  const wa = row.canal === 'whatsapp';
-  return { content_estado: wa ? 'unsubmitted' : '', content_estado_en: wa ? 'unsubmitted' : '' };
-};
-
 const counts = { created: 0, updated: 0, kept: 0 };
 for (const row of rows) {
   const clave = row.clave;
@@ -141,7 +145,7 @@ for (const row of rows) {
   const say = (verb) => console.log(`plantillas: ${clave} ${verb}${suffix}`);
 
   if (!current) {
-    if (!dryRun) await write(clave, 'POST', COL, { ...contentOf(row), estado: 'borrador', version: CATALOG_VERSION, ...contentDefaults(row) });
+    if (!dryRun) await write(clave, 'POST', COL, createBody(row)); // validated above, before any I/O
     counts.created++;
     say('created');
     continue;
@@ -155,16 +159,8 @@ for (const row of rows) {
   // point at two bodies. The catalog has to say it changed.
   if (instanceVersion === CATALOG_VERSION) { counts.kept++; say('kept (content differs at the same version — bump CATALOG_VERSION)'); continue; }
 
-  if (!dryRun) {
-    await write(clave, 'PATCH', `${COL}/${current.id}`, {
-      ...contentOf(row),
-      version: CATALOG_VERSION,
-      estado: 'borrador',
-      content_sid: '', content_motivo: '',
-      content_sid_en: '', content_motivo_en: '',
-      ...contentDefaults(row),
-    });
-  }
+  const body = updateBody(row);
+  if (!dryRun) await write(clave, 'PATCH', `${COL}/${current.id}`, body);
   counts.updated++;
   say('updated');
 }

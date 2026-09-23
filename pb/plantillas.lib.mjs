@@ -54,8 +54,18 @@ export const EMAIL_KEYS = ['asunto_es', 'asunto_en'];
 // Lifecycle fields the seed owns; the catalog never carries them.
 export const LIFECYCLE_KEYS = ['estado', 'version', 'content_sid', 'content_estado', 'content_motivo', 'content_sid_en', 'content_estado_en', 'content_motivo_en'];
 
-// What the seed compares and writes: the content, nothing else.
+// What the seed compares and writes: the content, nothing else. `clave` is
+// deliberately absent: it is the identity, sent once on create (createBody)
+// and never on update (updateBody).
 export const CONTENT_FIELDS = ['nombre', 'canal', 'categoria', 'evento', 'asunto_es', 'asunto_en', 'cuerpo_es', 'cuerpo_en', 'variables'];
+
+// The catalog's own version. Bump it when a content change must win over
+// edits made on the instance; rows whose instance version is higher are kept.
+export const CATALOG_VERSION = 1;
+
+// What pb/schema.json marks `required` on `plantillas`: a POST without any of
+// these is a 400 the dry-run must be able to predict.
+export const REQUIRED_ON_CREATE = ['clave', 'nombre', 'cuerpo_es', 'cuerpo_en'];
 
 // Placeholder names in order of appearance, duplicates kept.
 export const placeholders = (text) => Array.from(String(text ?? '').matchAll(PLACEHOLDER), (m) => m[1]);
@@ -76,6 +86,39 @@ export const contentOf = (row) => {
 };
 
 export const sameContent = (a, b) => JSON.stringify(contentOf(a)) === JSON.stringify(contentOf(b));
+
+// Twilio lifecycle defaults: WhatsApp rows start unsubmitted, email rows have
+// no Content lifecycle at all.
+export const contentDefaults = (row) => {
+  const wa = row.canal === 'whatsapp';
+  return { content_estado: wa ? 'unsubmitted' : '', content_estado_en: wa ? 'unsubmitted' : '' };
+};
+
+// The exact bodies the seed sends. Pure, so the tests and the dry-run build
+// the same object the live run POSTs/PATCHes.
+// create: identity + content + lifecycle at its start.
+export const createBody = (row, version = CATALOG_VERSION) => ({
+  clave: row.clave,
+  ...contentOf(row),
+  estado: 'borrador',
+  version,
+  ...contentDefaults(row),
+});
+// update (--force): content + version, lifecycle reset so the template goes
+// back through /content/submit. Never `clave`: the row is already that key.
+export const updateBody = (row, version = CATALOG_VERSION) => ({
+  ...contentOf(row),
+  version,
+  estado: 'borrador',
+  content_sid: '', content_motivo: '',
+  content_sid_en: '', content_motivo_en: '',
+  ...contentDefaults(row),
+});
+
+// Required-on-create fields a built body lacks (absent or blank), in
+// REQUIRED_ON_CREATE order. [] when PocketBase would accept it.
+export const missingOnCreate = (body) =>
+  REQUIRED_ON_CREATE.filter((k) => body?.[k] == null || String(body[k]).trim() === '');
 
 // Every rule the test asserts, as one "<clave>: <what>" line each. [] when
 // the catalog is valid. The seed prints these and exits 2 before any I/O.

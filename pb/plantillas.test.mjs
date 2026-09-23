@@ -6,9 +6,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  ASUNTO_MAX, AUDIENCES, CANALES, CATALOG_KEYS, CATEGORIAS, CLAVE, CLAVE_MAX, EMAIL_KEYS, EMAIL_OPT_OUT_VAR,
-  EVENTO, EVENTO_MAX, EXPECTED_ROWS, INTERNAL, LIFECYCLE_KEYS, LOOSE, OPT_OUT, PLACEHOLDER, REQUIRED_CLAVES,
-  VARIABLE, WHATSAPP_MAX, placeholders, problems,
+  ASUNTO_MAX, AUDIENCES, CANALES, CATALOG_KEYS, CATALOG_VERSION, CATEGORIAS, CLAVE, CLAVE_MAX, CONTENT_FIELDS,
+  EMAIL_KEYS, EMAIL_OPT_OUT_VAR, EVENTO, EVENTO_MAX, EXPECTED_ROWS, INTERNAL, LIFECYCLE_KEYS, LOOSE, OPT_OUT,
+  PLACEHOLDER, REQUIRED_CLAVES, REQUIRED_ON_CREATE, VARIABLE, WHATSAPP_MAX, createBody, missingOnCreate,
+  placeholders, problems, updateBody,
 } from './plantillas.lib.mjs';
 
 const rows = JSON.parse(readFileSync(new URL('./plantillas.json', import.meta.url), 'utf8'));
@@ -138,4 +139,40 @@ test('lib agreement: problems() is empty for the catalog and catches duplicates 
 
   const sameBody = rows.map((r, i) => (i === 0 ? { ...r, cuerpo_en: r.cuerpo_es } : r));
   assert.ok(problems(sameBody).some((p) => p === `${rows[0].clave}: cuerpo_es and cuerpo_en are identical`), 'same-body row undetected');
+});
+
+// The seed's bodies: PocketBase requires clave/nombre/cuerpo_es/cuerpo_en on
+// POST, and `clave` is the identity — sent on create, never on update. The
+// first live run 400ed on exactly this; the dry-run had never built a body.
+test('seed bodies: create carries clave and every schema-required field, update never carries clave', () => {
+  const schema = JSON.parse(readFileSync(new URL('./schema.json', import.meta.url), 'utf8'));
+  const plantillas = (Array.isArray(schema) ? schema : schema.collections ?? []).find((c) => c.name === 'plantillas');
+  const required = (plantillas.fields ?? plantillas.schema).filter((f) => f.required && !['created', 'updated'].includes(f.name)).map((f) => f.name);
+  assert.deepEqual([...required].sort(), [...REQUIRED_ON_CREATE].sort(), 'REQUIRED_ON_CREATE disagrees with pb/schema.json');
+
+  for (const row of rows) {
+    const create = createBody(row);
+    assert.equal(create.clave, row.clave, `${row.clave} create body lacks clave`);
+    for (const k of REQUIRED_ON_CREATE) assert.ok(typeof create[k] === 'string' && create[k].trim() !== '', `${row.clave} create body lacks ${k}`);
+    assert.deepEqual(missingOnCreate(create), [], row.clave);
+    assert.equal(create.estado, 'borrador', row.clave);
+    assert.equal(create.version, CATALOG_VERSION, row.clave);
+    for (const k of CONTENT_FIELDS) assert.ok(k in create, `${row.clave} create body lacks ${k}`);
+    assert.equal('audiencia' in create, false, `${row.clave} create body leaks audiencia`);
+
+    const update = updateBody(row);
+    assert.equal('clave' in update, false, `${row.clave} update body carries clave`);
+    assert.equal(update.version, CATALOG_VERSION, row.clave);
+    assert.equal(update.estado, 'borrador', row.clave);
+    for (const k of ['content_sid', 'content_motivo', 'content_sid_en', 'content_motivo_en']) assert.equal(update[k], '', `${row.clave} update does not reset ${k}`);
+    for (const k of CONTENT_FIELDS) assert.deepEqual(update[k], create[k], `${row.clave} ${k} differs between create and update`);
+    const wa = row.canal === 'whatsapp';
+    assert.equal(create.content_estado, wa ? 'unsubmitted' : '', row.clave);
+    assert.equal(update.content_estado_en, wa ? 'unsubmitted' : '', row.clave);
+  }
+
+  // A body missing a required field is named, in schema order.
+  const { clave: _c, ...noClave } = createBody(rows[0]);
+  assert.deepEqual(missingOnCreate(noClave), ['clave']);
+  assert.deepEqual(missingOnCreate({ ...createBody(rows[0]), nombre: '  ', cuerpo_en: '' }), ['nombre', 'cuerpo_en']);
 });
