@@ -414,6 +414,35 @@ describe('an answer about us is never an answer about a lead', () => {
     assert.deepEqual(pb.store.campanas[0].informe.enviados_ids, [leadUno.id]);
   });
 
+  it('an UNRECOGNISED coded 403 blocks the run and excludes nobody', async () => {
+    // The chassis's auth contract is changing this week, so an auth code we
+    // have never seen is the expected case. Read as a per-lead refusal it
+    // reaches "any other 4xx is terminal": every recipient permanently
+    // excluded, ten an hour, and the campaign then completes — announcing
+    // itself and reporting to the manager — having written to nobody, with a
+    // green run and nothing in Alertas.
+    const pb = fakePb(datosBase());
+    conChasis(() => respuesta(403, { ok: false, error: { code: 'auth_token_required', text: 'falta el token' } }));
+    const { ctx, eventos } = contexto(pb);
+    await run(ctx);
+    const informe = pb.store.campanas[0].informe;
+    assert.equal(informe.bloqueo.code, 'chasis_no_autorizado');
+    assert.match(informe.bloqueo.motivo, /auth_token_required/);
+    assert.deepEqual(informe.excluidos, []);
+    assert.equal(pb.store.campanas[0].estado, 'programada');
+    assert.equal(eventos.filter((e) => e.type === 'campana.completada').length, 0);
+  });
+
+  it('cuts whatever string the far end put in `error` down to an identifier', async () => {
+    const pb = fakePb(datosBase());
+    conChasis(() => respuesta(403, { error: '<b>forbidden</b> por el proxy; contacta a soporte '.repeat(4) }));
+    const { ctx } = contexto(pb);
+    await run(ctx);
+    const motivo = pb.store.campanas[0].informe.bloqueo.motivo;
+    assert.ok(!motivo.includes('<b>'), motivo);
+    assert.ok(motivo.length < 220, motivo.length);
+  });
+
   it('a 403 that carries a real per-lead code refuses one lead, not the campaign', async () => {
     // The chassis's auth contract is changing: a future per-lead refusal
     // shipped as 403 with a proper code must not read as "our secret is wrong".
@@ -642,20 +671,82 @@ describe('what stops a campaign, and stops it loudly', () => {
     assert.equal(segunda.mensajes.length, 0, 'the same blockage, the same day, is said once');
   });
 
-  it('pauses after three runs that sent nothing, and says how to resume', async () => {
-    conChasis(() => { throw new Error('outside the window there is nothing to call'); });
+  it('says it once a day for a blockage raised after the run clears the old one', async () => {
+    // `sin_chasis` above is raised BEFORE the run resets informe.bloqueo, so it
+    // never exercised the guard. Everything raised inside the send loop did,
+    // and compared against a value this same run had just cleared — so it
+    // alerted every hour, for ever, unbounded.
     const pb = fakePb(datosBase());
-    pb.store.campanas[0].hora_desde = '02:00';
-    pb.store.campanas[0].hora_hasta = '03:00'; // never now
+    conChasis(() => respuesta(503, { error: 'smtp not configured' }));
+    const avisos = [];
+    for (let i = 0; i < 6; i++) {
+      const c = contexto(pb);
+      await run(c.ctx);
+      avisos.push(c.mensajes.length, c.eventos.filter((e) => e.type === 'campana.error').length);
+    }
+    const mensajes = avisos.filter((_, i) => i % 2 === 0).reduce((a, b) => a + b, 0);
+    const errores = avisos.filter((_, i) => i % 2 === 1).reduce((a, b) => a + b, 0);
+    assert.equal(mensajes, 1, 'six runs, one Telegram line');
+    assert.equal(errores, 1, 'six runs, one campana.error row');
+  });
+
+  it('pauses after three runs that could have sent and did not', async () => {
+    conChasis(() => { throw new Error('the intent was never recorded, so nothing is sent'); });
+    const pb = fakePb(datosBase());
+    // A real quiet run: the quota allows it and somebody is pending, but the
+    // write that records the intent fails, so the job refuses to send.
+    const original = pb.collection;
+    pb.collection = (nombre) => {
+      const col = original(nombre);
+      if (nombre !== 'campanas') return col;
+      return {
+        ...col,
+        update: async (id, body) => {
+          if (body?.informe?.en_vuelo?.length) throw new Error('PATCH campanas → 500');
+          return col.update(id, body);
+        },
+      };
+    };
     let mensajes = [];
     for (let i = 0; i < 3; i++) {
       const c = contexto(pb);
       await run(c.ctx);
       mensajes = c.mensajes;
     }
+    assert.equal(llamadas.length, 0, 'an unrecorded send is never sent');
+    assert.equal(pb.store.campanas[0].informe.runs_sin_envio, 3);
     assert.equal(pb.store.campanas[0].estado, 'pausada');
     assert.match(mensajes[0], /Campaña pausada/);
     assert.match(mensajes[0], /en_curso/);
+  });
+
+  it('never pauses for runs that had no permission to send', async () => {
+    // The one that would have bitten the rehearsal: lote_diario and the
+    // sending window used to cancel each other out, so a campaign that sent
+    // its message paused three hours later and an 08:00–22:00 campaign paused
+    // overnight — both needing a human in PocketBase Admin to come back.
+    conChasis(() => { throw new Error('outside the window there is nothing to call'); });
+    const pb = fakePb(datosBase());
+    pb.store.campanas[0].hora_desde = '02:00';
+    pb.store.campanas[0].hora_hasta = '03:00'; // never now
+    for (let i = 0; i < 5; i++) {
+      const c = contexto(pb);
+      await run(c.ctx);
+    }
+    assert.equal(pb.store.campanas[0].informe.runs_sin_envio, 0);
+    assert.equal(pb.store.campanas[0].estado, 'programada');
+  });
+
+  it('never pauses once the day\'s batch is spent', async () => {
+    conChasis(() => { throw new Error('the batch is spent, there is nothing to call'); });
+    const pb = fakePb(datosBase());
+    pb.store.envios.push({ id: 'envHoy', lead: 'otro00000000001', plantilla: plantillaEmail.id, campana: campanaBase.id, estado: 'enviado', enviado_en: '2026-09-23 09:00:00.000Z', created: '2026-09-23 09:00:00.000Z' });
+    for (let i = 0; i < 4; i++) {
+      const c = contexto(pb);
+      await run(c.ctx);
+    }
+    assert.equal(pb.store.campanas[0].informe.runs_sin_envio, 0);
+    assert.notEqual(pb.store.campanas[0].estado, 'pausada');
   });
 
   it('never touches a campaign a human parked, finished or cancelled', async () => {

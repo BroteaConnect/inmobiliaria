@@ -320,9 +320,21 @@ describe('esRechazoDeCredencial', () => {
     assert.equal(esRechazoDeCredencial({ code: 'http_401', status: 401 }), true);
   });
 
-  it('leaves a real per-lead refusal alone even on those statuses', () => {
-    assert.equal(esRechazoDeCredencial({ code: 'no_consent', status: 403 }), false);
+  it('claims an UNRECOGNISED coded 401/403 too — the auth contract is changing', () => {
+    // The trap: treating any coded 403 as a per-lead refusal sends it through
+    // "any other 4xx is terminal", which writes off every recipient in the run
+    // and then completes the campaign having messaged nobody.
+    assert.equal(esRechazoDeCredencial({ code: 'auth_token_required', status: 403, estructurado: true }), true);
+    assert.equal(esRechazoDeCredencial({ code: 'token_expired', status: 401, estructurado: true }), true);
+  });
+
+  it('leaves a refusal we RECOGNISE as per-lead alone', () => {
+    assert.equal(esRechazoDeCredencial({ code: 'no_consent', status: 403, estructurado: true }), false);
     assert.equal(esRechazoDeCredencial({ code: 'forbidden', status: 400 }), false);
+    // A known code arriving as a bare sentence is still read as a credential
+    // failure: the chassis never answers that way, and of the two mistakes
+    // blocking the run is the recoverable one.
+    assert.equal(esRechazoDeCredencial({ code: 'no_consent', status: 403 }), true);
   });
 
   it('is never ambiguous and never terminal-for-the-lead', () => {

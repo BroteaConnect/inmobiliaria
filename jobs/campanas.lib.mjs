@@ -375,8 +375,16 @@ export const RECHAZOS_DE_RUN = ['variables_missing'];
  */
 export function esRechazoDeCredencial({ code, status, estructurado = false } = {}) {
   if (!ESTADOS_DE_CREDENCIAL.includes(Number(status))) return false;
-  if (estructurado) return false;
-  return !RECHAZOS_TERMINALES.includes(String(code ?? ''));
+  // Only a code we RECOGNISE as a per-lead refusal means "this person, not our
+  // secret". An unrecognised one must NOT disqualify the credential reading:
+  // it would fall through to `esRechazoTerminal`, whose last rule is "any
+  // other 4xx is terminal", and a gate answering 403 `auth_token_required`
+  // would write off every recipient in the run as permanently excluded — then
+  // the campaign completes, announces itself, and reports to the manager,
+  // having written to nobody. The chassis's auth contract changes this week,
+  // so an unfamiliar auth code is the expected case, not the exotic one.
+  // Blocking the run is recoverable; excluding the cartera is not.
+  return !(estructurado && RECHAZOS_TERMINALES.includes(String(code ?? '')));
 }
 
 /**
@@ -529,7 +537,7 @@ export function pendientes({ destinatarios = [], envios = [], informe = {} }) {
  * Delivery states are a SNAPSHOT — `entregado` arrives by webhook minutes
  * later, so a campaign that completes in the same run truthfully says 0.
  */
-export function cerrarInforme(informe, { destinatarios = [], envios = [], enviadosEnRun = 0, now = new Date(), completada = false }) {
+export function cerrarInforme(informe, { destinatarios = [], envios = [], enviadosEnRun = 0, pudoEnviar = true, now = new Date(), completada = false }) {
   const out = informeInicial(informe);
   out.destinatarios = destinatarios.length;
   // The ledger is the truth, EXCEPT that it cannot see a send whose `envios`
@@ -543,7 +551,15 @@ export function cerrarInforme(informe, { destinatarios = [], envios = [], enviad
   out.estados = envios.reduce((a, e) => ({ ...a, [e.estado || 'sin_estado']: (a[e.estado || 'sin_estado'] ?? 0) + 1 }), {});
   out.runs += 1;
   out.ultimo_run_en = new Date(now).toISOString();
-  out.runs_sin_envio = enviadosEnRun > 0 ? 0 : out.runs_sin_envio + 1;
+  // `runs_sin_envio` is what pauses a campaign after three strikes, so it may
+  // only count runs that COULD have sent and did not. Counting every quiet run
+  // made `lote_diario` and the sending hours cancel each other out: a campaign
+  // with a batch of 1 sent its message and paused three hours later, and an
+  // 08:00–22:00 campaign paused overnight — both needing a human in
+  // PocketBase Admin to resume. Outside the window, before `inicio`, with the
+  // day's batch spent or with nobody pending, there was nothing to fail at.
+  if (enviadosEnRun > 0) out.runs_sin_envio = 0;
+  else if (pudoEnviar) out.runs_sin_envio += 1;
   if (completada && !out.completada_en) out.completada_en = new Date(now).toISOString();
   return out;
 }

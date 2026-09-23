@@ -251,8 +251,13 @@ transitions:
 - `en_curso → completada` when nobody is left AND nothing is unresolved (an
   empty segment completes on the first run with 0 recipients — honest, not a
   bug)
-- `en_curso → pausada` after three runs in a row that sent nothing, with the
-  reason in `informe.bloqueo`
+- `en_curso → pausada` after three runs in a row that **could have sent and did
+  not**, with the reason in `informe.bloqueo`. Runs outside the sending window,
+  before `inicio`, with the day's batch already spent or with nobody pending do
+  not count: there was nothing to fail at. Counting them made `lote_diario` and
+  the sending hours cancel each other out — a campaign with a batch of 1 sent
+  its message and paused three hours later, and an 08:00–22:00 campaign paused
+  overnight, each needing a human in PocketBase Admin to come back.
 - nothing else. `borrador` is only armed; `pausada`, `completada` and
   `cancelada` are a human's decision and the job does not argue with them.
 
@@ -311,7 +316,7 @@ rewritten after every single send, and the next run repairs it first.
 | `no_email`, `no_phone`, `no_consent`, `consent_revoked`, `template_not_approved`, `outside_window`, any other 4xx | terminal for that lead: `informe.excluidos`, and the campaign can complete |
 | `chassis_timeout`, `chassis_unreachable`, `provider_unavailable`, 429, Twilio `63018` | retryable, because the chassis said in so many words that nothing left: stays pending, `informe.reintentos[lead]++`, given up as `agotado` at 3 |
 | `variables_missing` | terminal for the RUN: the same values are built for everybody, so one bug must not burn ten leads |
-| **401 / 403** in the secret gate's bare shape (`{error: '…'}`, no `error.code`) | terminal for the RUN: `informe.bloqueo = { code: 'chasis_no_autorizado' }`, nobody is excluded, no state changes |
+| **401 / 403**, unless it carries a per-lead code we recognise | terminal for the RUN: `informe.bloqueo = { code: 'chasis_no_autorizado' }`, nobody is excluded, no state changes |
 | **`… not configured`** (`not configured`, `smtp not configured`, `pocketbase not configured`, `outbound email not configured`) | terminal for the RUN: `chasis_no_configurado`. Same reasoning as the credential — a guard clause raised for every recipient alike, before any provider call |
 | `send failed`, and any unnamed 5xx **the chassis itself produced** | ambiguous, treated exactly like silence (below) |
 | a 5xx that is *not* chassis JSON (a Traefik/Coolify page mid-redeploy) | retryable: nothing ever reached the mailer |
@@ -327,9 +332,19 @@ three retries and then writes them off as `agotado` — in both cases the
 campaign "completes" having written to nobody, with no way back but editing the
 `informe` by hand, and the Telegram line blames the segment. Both block the
 campaign instead, naming which one it is, and change nobody's state. The
-credential rule requires the secret gate's *bare* shape — a sentence with no
-`error.code` — so that a Traefik or WAF 403, or a future per-lead refusal
-shipped as a 403 with a proper code, is not mistaken for our secret being wrong.
+credential rule is deliberately **inclusive**: a 401/403 blocks the run unless
+it carries a per-lead code we already recognise (`no_consent` and the rest of
+`RECHAZOS_TERMINALES`). An auth code we have never seen — and the chassis's
+auth contract is changing — must not be read as a refusal of one person,
+because the fall-through for an unknown 4xx is "terminal for that lead": it
+would write off every recipient in the run, ten an hour, and then let the
+campaign complete and announce itself having messaged nobody. Blocking is
+recoverable; excluding the cartera is not. A 403 from a proxy or a WAF is
+indistinguishable from the chassis's own out here and blocks in the same way,
+so the Telegram line names both possibilities instead of sending the team
+straight to `OUTBOUND_SECRET`. The far end's code travels with it, sanitised
+down to an identifier: it reaches Telegram and an event payload, and it is not
+our string.
 
 **Ambiguity is narrow on purpose**: only a 5xx the chassis wrote itself (its
 own `{ok}`/`{error}` shape, or at least a JSON content-type), with no code we
@@ -354,8 +369,11 @@ holding unresolved sends is blocked (`nada_enviado`) rather than completed:
 quiet failure must not look like success. That blockage is recorded, never
 returned early — the transport alarm at the end of the run has to fire, or
 `run-jobs` records a green run, Alertas is never told and the three-strike
-circuit never opens. After three runs that sent nothing the campaign pauses
-(carrying that reason) instead of re-blocking every hour for ever.
+circuit never opens. After three runs that could have sent and did not, the campaign
+pauses (carrying that reason) instead of re-blocking for ever. A blockage is
+announced at most once a Madrid day, compared against what the *previous* run
+left: the run clears `informe.bloqueo` before the send loop, so comparing
+against the live value quietly made every blockage hourly and unbounded.
 
 Only a chassis that never answered — or answered ambiguously — makes `run()`
 throw. Business refusals never do: three throws in one Madrid day open the
