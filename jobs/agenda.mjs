@@ -24,26 +24,36 @@ export async function run({ pb, notify, event, log, now }) {
   const leads = await pb.collection('leads').getFullList({ filter });
   const stale = desatendidos(leads, now);
 
-  const { desde, hasta } = ventanaVisitas(now);
-  const visitas = await pb.collection('visitas').getFullList({
-    filter: `cuando >= "${desde}" && cuando < "${hasta}"`,
-    expand: 'lead,propiedad,agente',
-    sort: 'cuando',
-  });
-  const visits = visitasDeHoy(visitas, now);
-  // Always said, even when silent: the E4 gate reads this line.
+  // The visits query must never take the stale-lead reminder down with it:
+  // a failed fetch is logged and the morning goes on with no visits section,
+  // instead of throwing out of run() and opening the circuit after 3 mornings.
+  let visits = [];
+  try {
+    const { desde, hasta } = ventanaVisitas(now);
+    const visitas = await pb.collection('visitas').getFullList({
+      filter: `cuando >= "${desde}" && cuando < "${hasta}"`,
+      expand: 'lead,propiedad,agente',
+      sort: 'cuando',
+    });
+    visits = visitasDeHoy(visitas, now);
+  } catch (e) {
+    log(`agenda: visits unavailable: ${e?.message ?? e}`);
+  }
+  // Always said, even when silent or degraded: the E4 gate reads this line.
   log(`agenda: ${visits.length} visit(s) today`);
 
   if (!stale.length && !visits.length) {
     log('agenda: no unattended leads, staying silent');
     return;
   }
-  // Event first, notify last: if a retry replays the job after a partial
+  // Events first, notify last: if a retry replays the job after a partial
   // failure, a duplicate event row is harmless — a duplicate Telegram blast
-  // is not.
-  await event('lead.reminder_sent', {
-    count: stale.length, oldest: stale[0]?.id ?? null, visits: visits.length,
-  });
+  // is not. lead.reminder_sent keeps meaning "there were stale leads" (its
+  // `oldest` is never null); agenda.sent is the digest itself.
+  if (stale.length) {
+    await event('lead.reminder_sent', { count: stale.length, oldest: stale[0].id, visits: visits.length });
+  }
+  await event('agenda.sent', { visits: visits.length, unattended: stale.length });
   const digest = [textoVisitas(visits, now), textoAgenda(stale, now)].filter(Boolean).join('\n\n');
   await notify(digest);
   log(`agenda: notified ${stale.length} unattended lead(s) and ${visits.length} visit(s)`);

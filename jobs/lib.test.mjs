@@ -327,6 +327,15 @@ describe('textoVisitas', () => {
     assert.match(textoVisitas([v], NOW), new RegExp(`<b>${'&amp;'.repeat(MAX_NOMBRE)}</b> · `));
   });
 
+  it('truncates property title and agent name too (titulo has no max)', () => {
+    const v = visita({
+      expand: { lead: { nombre: 'Ana' }, propiedad: { titulo: '<'.repeat(500) }, agente: { name: '>'.repeat(500) } },
+    });
+    const txt = textoVisitas([v], NOW);
+    assert.match(txt, new RegExp(`<b>Ana</b> · ${'&lt;'.repeat(MAX_NOMBRE)} · ${'&gt;'.repeat(MAX_NOMBRE)}$`, 'm'));
+    assert.ok(txt.length < 4096);
+  });
+
   it('degrades a missing relation to a placeholder, never to "undefined"', () => {
     const sinExpand = visita({ expand: undefined });
     const parcial = visita({ expand: { lead: { nombre: 'Bea' } } });

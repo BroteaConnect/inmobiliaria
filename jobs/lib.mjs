@@ -130,15 +130,18 @@ export const horaMadrid = (date) => {
 // `HH:MM · <b>lead</b> · property · agent`, read from the expanded relations
 // (`expand=lead,propiedad,agente`). A relation that did not expand — a lead
 // deleted since, a visit saved without a property — degrades to a Spanish
-// placeholder, never to "undefined". Returns null when there are no visits.
+// placeholder, never to "undefined". Every name is cut to MAX_NOMBRE before
+// escaping: propiedades.titulo has no max, and ten long titles would push the
+// digest past Telegram's 4096 chars after the event row is already written.
+// Returns null when there are no visits.
+const recorta = (s) => escapeHtml(String(s).slice(0, MAX_NOMBRE));
 export function textoVisitas(visitas, now) {
   if (!visitas.length) return null;
   const lines = visitas.slice(0, MAX_LINES).map((v) => {
-    const lead = v.expand?.lead?.nombre || 'lead sin nombre';
-    const propiedad = v.expand?.propiedad?.titulo || 'sin propiedad';
-    const agente = v.expand?.agente?.name || 'sin agente';
-    const nombre = escapeHtml(String(lead).slice(0, MAX_NOMBRE));
-    return `• ${horaMadrid(v.cuando)} · <b>${nombre}</b> · ${escapeHtml(propiedad)} · ${escapeHtml(agente)}`;
+    const lead = recorta(v.expand?.lead?.nombre || 'lead sin nombre');
+    const propiedad = recorta(v.expand?.propiedad?.titulo || 'sin propiedad');
+    const agente = recorta(v.expand?.agente?.name || 'sin agente');
+    return `• ${horaMadrid(v.cuando)} · <b>${lead}</b> · ${propiedad} · ${agente}`;
   });
   if (visitas.length > MAX_LINES) lines.push(`… y ${visitas.length - MAX_LINES} más`);
   const n = visitas.length;
