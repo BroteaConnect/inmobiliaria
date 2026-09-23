@@ -26,6 +26,7 @@ aislamiento de fallos, reintentos) es del chasis y no se copia.
 |---|---|---|
 | `jobs/agenda.mjs` | 09:00 | Leads con más de **48 h** sin contacto, el más abandonado primero. `⚠️` a partir de 5 días. Máximo 10 líneas + "… y N más". |
 | `jobs/resumen.mjs` | 20:00 | Resumen del día: leads nuevos, importados a la cartera, contactos salientes por canal, mensajes entrantes, emails entregados y propiedades publicadas. |
+| `jobs/campanas.mjs` | hourly | Only when a campaign pauses or completes (see [campanas](#campanas)). |
 | `jobs/matcher.mjs` | 09:30 | Shortlist de leads que encajan con cada propiedad publicada o tocada en las últimas 24 h (ver [matcher](#matcher)). |
 
 **El silencio es una feature**: si no hay leads desatendidos o el día está
@@ -148,6 +149,56 @@ business-initiated WhatsApp message needs a Twilio Content template (or the
 lead's own 24-hour window, which a lead who wrote weeks ago no longer has);
 that template is E5's deliverable, and the matcher will call it from there.
 
+## campanas
+
+`jobs/campanas.mjs` (hourly, I/O only) advances every `campanas` row in
+`programada` or `en_curso` by at most one batch; the rules live in
+`jobs/campanas.lib.mjs` and the refusal taxonomy in `jobs/refusals.lib.mjs`
+(the `.lib.mjs` suffix keeps the scheduler from running them as jobs).
+
+- **Estados.** `borrador` is armed and never touched; a human moves it to
+  `programada` (PocketBase Admin today). The job moves `programada → en_curso`
+  (recipients frozen into `informe.recipients`), `en_curso → pausada` and
+  `en_curso → completada`. Only a human resumes a `pausada`.
+- **Segment v1** (`segmento`): `{v: 1, ids?, etapa?, origen?, consentimiento?,
+  idioma?, canal_preferido?, asignado?}`, ANDed. An unknown key, a wrong type,
+  a missing `v` or no criterion pauses the campaign — never "everybody".
+- **Guards**, before any write, and a refused guard writes nothing and emits
+  no `campana.*` event: a row named `CU-15` needs job secrets
+  `CU15_OWNER_YES=<its id>` and `CAMPAIGN_SENDER_READY=1`; without
+  `CAMPAIGN_SENDER_READY` the only allowed recipients are `TEST_LEAD_IDS`
+  (a constant in `campanas.lib.mjs`: changing it is a PR); real recipients
+  also need CU-15 `completada`.
+- **Cadence.** Inside `[hora_desde, hora_hasta)` Madrid time, from `inicio`,
+  at most `min(10, lote_diario left today, intervalo_min credits)` per tick.
+- **Refusals.** Every chassis answer is classified by `refusals.lib.mjs`.
+  Only a *recognised* per-lead code (STOP, no consent, no phone/email…)
+  excludes a lead, from this campaign only. A provider number code before
+  anything was sent may be our sender's fault: that lead is `deferred` behind
+  every pending one, and three in a row with nothing sent pause the campaign
+  (a resume starts the count again). A code about the run (auth,
+  config, template) pauses. **Anything unrecognised is infrastructure**: the
+  lead goes back to pending, and three such ticks in a row pause. An answer
+  after which the message may have left (email 502/500, a proxy 500/502/504
+  page, an unreadable 2xx, timeouts, `provider_unavailable`) is never
+  retried: it is settled against `envios` on a later tick, or marked doubtful
+  for a human. For email any ledger row means it left (a later bounce is
+  doubtful, never retried); only WhatsApp error rows are classified by code.
+- **Report.** `informe` v1 (`alcanzados` = distinct leads with an `envios`
+  row in enviado/entregado/abierto/click, `intentados_ids`, `excluidos`,
+  `revision_humana`, `completada_en`) is what the E5 gate recomputes.
+  Completion writes `campana.completada` first, then the row, then Telegram;
+  the manager's WhatsApp report goes to `CAMPAIGN_REPORT_LEAD_ID` when set.
+- **Secrets** (`~/.config/brotea/jobs-inmobiliaria.env`): `CHASSIS_URL`,
+  `OUTBOUND_SECRET`; flags `CAMPAIGN_SENDER_READY`, `CU15_OWNER_YES`,
+  `CAMPAIGN_REPORT_LEAD_ID`. The secret goes in the query string, never a
+  header, and is scrubbed from every log, event and error.
+- **Seed.** `node pb/campanas.mjs [--dry-run]` creates `pb/campanas.json`
+  rows by `nombre` and never patches one: CU-15 in `borrador`, and an email
+  rehearsal to the test lead in `programada`.
+- Every tick that pauses, refuses a guard or stops on a fault **throws**, so
+  the runner records a failure and Alertas hears about it.
+
 ## Probar y dry-run
 
 - Tests unitarios: `npm test` (ejecuta `node --test jobs/*.test.mjs
@@ -165,6 +216,8 @@ that template is E5's deliverable, and the matcher will call it from there.
   resumen, `matcher.shortlist` (`{propiedad_id, candidates, lead_ids}`) el
   matcher — **antes** de `notify()`: si un reintento repite el job, duplica
   una fila inofensiva, no un mensaje de Telegram.
+- Exception: `campanas` does write its own `campanas` row (never a lead), and
+  under `--dry-run` every write and every chassis call is skipped and logged.
 
 Para añadir o modificar un job, usa la skill `jobs`
 (`.claude/skills/jobs/SKILL.md`), que documenta el contrato del módulo.
