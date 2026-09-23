@@ -322,33 +322,65 @@ export const RECHAZOS_TERMINALES = [
   'outside_window', 'text_too_long', 'actividad_invalid', 'agotado',
 ];
 // Retryable: the chassis said, in so many words, that nothing left. The same
-// message may well go out on the next run.
+// message may well go out on the next run. The `… not configured` sentences
+// are literal answers from the chassis (`src/server.js`) and they are a 503
+// that sent nothing at all — a redeploy with a half-loaded environment answers
+// exactly that, and filing those leads as "maybe sent" would lose them for good.
 export const RECHAZOS_REINTENTABLES = [
   'chassis_timeout', 'chassis_unreachable', 'provider_unavailable', 'ledger_unavailable', '63018',
+  'not configured', 'smtp not configured', 'pocketbase not configured', 'outbound email not configured',
 ];
 // AMBIGUOUS: the chassis answered "no" AFTER the message may already have
 // gone. `/send-email` returns 502 `send failed` whenever sendTrackedEmail
 // throws — and it can throw on the `actividades` POST or the `leads` PATCH,
-// both of which run after nodemailer has accepted the message. Retrying that
-// is how one lead gets three copies, so an ambiguous refusal is treated like
-// no answer at all: the recipient stays in `en_vuelo` and the next run adopts
-// it or files it as `dudoso`. Note the space: the chassis sends the sentence,
-// not an identifier, and a whitelist with an underscore never matched it.
-export const RECHAZOS_AMBIGUOS = ['send failed', 'sent_unrecorded'];
+// both of which run once nodemailer has accepted the message. Retrying that is
+// how one lead gets three copies, so an ambiguous refusal is treated like no
+// answer at all: the recipient stays in `en_vuelo` and the next run adopts it
+// or files it as `dudoso`. Note the space: the chassis sends the sentence, not
+// an identifier, and a whitelist with an underscore never matched it.
+// (A send whose ledger row failed is NOT here: the chassis returns that as
+// 200 `{ok: true, recorded: false}`, a success, and enviados_ids records it.)
+export const RECHAZOS_AMBIGUOS = ['send failed'];
+// Authentication is a property of the RUN, never of a lead. The shared secret
+// travels in the query string and a rotated one answers 403 `forbidden` for
+// every single recipient — filing 216 people as terminally excluded, with the
+// campaign then "completing" having written to nobody and no way back short of
+// editing the informe by hand. A wrong credential is the same class of problem
+// as a missing one: it blocks the campaign and changes no lead's state.
+export const ESTADOS_DE_CREDENCIAL = [401, 403];
 // Terminal for the whole RUN: the variables are built the same way for
 // everybody, so one missing value would burn ten leads on one bug.
 export const RECHAZOS_DE_RUN = ['variables_missing'];
 
 /**
- * True when we cannot tell whether the message left. Anything the chassis has
- * not given a known code to, answered with a 5xx, is in this class: a server
- * error after the send is exactly the case a retry duplicates.
+ * True when the answer is about US and not about this lead: a rotated or
+ * missing shared secret. `code` only disqualifies it if it is a refusal the
+ * chassis raises per lead, because the secret gate answers a bare
+ * `{error: 'forbidden'}` with no code at all.
  */
-export function esRechazoAmbiguo({ code, status } = {}) {
+export function esRechazoDeCredencial({ code, status } = {}) {
+  if (!ESTADOS_DE_CREDENCIAL.includes(Number(status))) return false;
+  return !RECHAZOS_TERMINALES.includes(String(code ?? ''));
+}
+
+/**
+ * True when we cannot tell whether the message left — the one case where a
+ * retry is worse than giving up.
+ *
+ * `json` says whether the answer was the chassis's own JSON (`{ok}`/`{error}`).
+ * It matters: an infrastructure 5xx — Traefik or Coolify while the app
+ * restarts — is an HTML page, and nothing ever reached the mailer. Treating
+ * that as "maybe sent" files every recipient as `dudoso`, permanently, for a
+ * redeploy. Only a 5xx the chassis itself produced, with no code we recognise,
+ * is genuinely ambiguous. Unknown shape defaults to ambiguous: never send
+ * twice is the safer of the two mistakes.
+ */
+export function esRechazoAmbiguo({ code, status, json = true } = {}) {
   const c = String(code ?? '');
   if (RECHAZOS_AMBIGUOS.includes(c)) return true;
   if (RECHAZOS_TERMINALES.includes(c) || RECHAZOS_REINTENTABLES.includes(c)) return false;
-  return (Number(status) || 0) >= 500;
+  if (esRechazoDeCredencial({ code, status })) return false;
+  return json && (Number(status) || 0) >= 500;
 }
 
 /** True when this refusal will never resolve by trying again. */
@@ -388,6 +420,8 @@ export function informeInicial(previo = {}) {
     // send that already left), and the `campana` patch can fail too. Depending
     // on a foreign-key write landing means the next run sees the lead as
     // pending and writes to them again, every hour, for ever.
+    // Unlike enlaces_fallidos this needs no cap: its bound IS the recipient
+    // list — one id per person, added once, and `max` bounds that.
     enviados_ids: Array.isArray(p.enviados_ids) ? [...p.enviados_ids] : [],
     por_dia: esObjeto(p.por_dia) ? { ...p.por_dia } : {},
     estados: esObjeto(p.estados) ? { ...p.estados } : {},
@@ -472,10 +506,13 @@ export function cerrarInforme(informe, { destinatarios = [], envios = [], enviad
   const out = informeInicial(informe);
   out.destinatarios = destinatarios.length;
   // The ledger is the truth, EXCEPT that it cannot see a send whose `envios`
-  // row the chassis failed to write (it answers ok with envio_id: null). Those
-  // are in enviados_ids and they happened, so the report never claims fewer
-  // messages than we know went out.
-  out.enviados = Math.max(envios.filter((e) => e.estado !== 'error').length, out.enviados_ids.length);
+  // row the chassis failed to write (it answers ok with envio_id: null). The
+  // union of both by LEAD — not the larger of two lengths, which would let a
+  // lead missing from the ledger hide behind a lead missing from the informe.
+  out.enviados = new Set([
+    ...envios.filter((e) => e.estado !== 'error').map((e) => e.lead),
+    ...out.enviados_ids,
+  ]).size;
   out.estados = envios.reduce((a, e) => ({ ...a, [e.estado || 'sin_estado']: (a[e.estado || 'sin_estado'] ?? 0) + 1 }), {});
   out.runs += 1;
   out.ultimo_run_en = new Date(now).toISOString();

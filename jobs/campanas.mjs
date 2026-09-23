@@ -25,7 +25,8 @@
 //     campaign's `estado` is left exactly as it was.
 import {
   ESTADOS_ACTIVOS, MAX_ENLACES_FALLIDOS, RECHAZOS_DE_RUN, RUNS_SIN_ENVIO_PARA_PAUSAR, SegmentoInvalido,
-  aplicarEnvio, aplicarRechazo, cerrarInforme, cuotaDelRun, esRechazoAmbiguo, evaluarSegmento, informeInicial,
+  aplicarEnvio, aplicarRechazo, cerrarInforme, cuotaDelRun, esRechazoAmbiguo, esRechazoDeCredencial,
+  evaluarSegmento, informeInicial,
   payloadCompletada, pendientes, plantillaLista, textoCampanaArmada, textoCampanaBloqueada,
   textoCampanaCompletada, textoCampanaPausada, variablesPara,
 } from './campanas.lib.mjs';
@@ -55,8 +56,11 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
   /**
    * One chassis call. Returns:
    *   { ok: true, status, envio_id, actividad_id }        the message left
-   *   { ok: false, status, code }                          it answered "no"
+   *   { ok: false, status, code, json }                    it answered "no"
    *   { ambiguo: true, code }                              it never answered
+   * `json` says whether the answer was the chassis's own ({ok}/{error}) or
+   * something in front of it — a Traefik or Coolify error page during a
+   * redeploy. The difference decides whether a 5xx may have been sent.
    * The URL carries the secret and is therefore NEVER logged: the route and
    * the status are what a diagnostic needs.
    */
@@ -84,10 +88,11 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
         actividad_id: body?.activity_id ?? body?.actividad_id ?? null,
       };
     }
+    const suyo = body != null && typeof body === 'object' && ('error' in body || 'ok' in body);
     const code = body?.error?.code
       || (typeof body?.error === 'string' ? body.error : null)
       || `http_${res.status}`;
-    return { ok: false, status: res.status, code: String(code).slice(0, 60) };
+    return { ok: false, status: res.status, code: String(code).slice(0, 60), json: suyo };
   };
 
   // -- the data, read once ----------------------------------------------------
@@ -253,7 +258,21 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
       log(`campanas: ${campana.nombre}: repaired ${informe.enlaces_fallidos.length ? 'some' : 'all'} broken link(s)`);
     }
 
-    // 2. Resolve what was in flight when a previous run died, by adoption.
+    // 2. Everything that must be true before a single message is built.
+    if (!hayChasis) {
+      return bloquear(campana, informe, {
+        code: 'sin_chasis',
+        motivo: 'faltan CHASSIS_URL u OUTBOUND_SECRET en ~/.config/brotea/jobs-<slug>.env', // lang-sweep: allow
+      });
+    }
+    const lista = plantillaLista(plantilla);
+    if (!lista.listo) return bloquear(campana, informe, { code: lista.code, motivo: lista.motivo });
+
+    // 3. Resolve what was in flight when a previous run died, by adoption.
+    //    AFTER the template gate on purpose: adoption needs the template to
+    //    recognise our own `envios` row, and a campaign whose `plantilla` was
+    //    cleared would otherwise file every in-flight entry as `dudoso` —
+    //    irreversibly — a moment before the run blocks on `sin_plantilla`.
     if (informe.en_vuelo.length) {
       const siguen = [];
       const dudosos = [...informe.dudosos];
@@ -295,17 +314,6 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
       informe = { ...informe, en_vuelo: siguen, dudosos };
       if (!dryRun) envios = await enviosDe(campana.id);
     }
-
-    // 3. Everything that must be true before a single message is built.
-    if (!hayChasis) {
-      return bloquear(campana, informe, {
-        code: 'sin_chasis',
-        motivo: 'faltan CHASSIS_URL u OUTBOUND_SECRET en ~/.config/brotea/jobs-<slug>.env', // lang-sweep: allow
-      });
-    }
-    const lista = plantillaLista(plantilla);
-    if (!lista.listo) return bloquear(campana, informe, { code: lista.code, motivo: lista.motivo });
-
     let alcance;
     try {
       alcance = evaluarSegmento({ segmento: campana.segmento, leads, canal: plantilla.canal, now });
@@ -323,13 +331,16 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
 
     // 4. How many this hour allows.
     const cuota = cuotaDelRun({ campana, envios, now });
-    if (['horario_invalido', 'lote_invalido'].includes(cuota.motivo)) {
-      return bloquear(campana, informe, {
-        code: cuota.motivo,
-        motivo: cuota.motivo === 'horario_invalido'
-          ? `la ventana ${campana.hora_desde || '--:--'}–${campana.hora_hasta || '--:--'} no es válida (no hay vuelta de hora)` // lang-sweep: allow
-          : 'lote_diario tiene que ser un entero de 1 o más', // lang-sweep: allow
-      });
+    const MOTIVOS_DE_CONFIG = {
+      horario_invalido: `la ventana ${campana.hora_desde || '--:--'}–${campana.hora_hasta || '--:--'} no es válida (no hay vuelta de hora)`, // lang-sweep: allow
+      lote_invalido: 'lote_diario tiene que ser un entero de 1 o más', // lang-sweep: allow
+      // Without this the campaign sent nothing, climbed runs_sin_envio and
+      // paused three hours later blaming the segment — pointing the owner
+      // anywhere but at the field they mistyped.
+      intervalo_invalido: `intervalo_min (${campana.intervalo_min}) tiene que ser un entero de 0 o más minutos`, // lang-sweep: allow
+    };
+    if (MOTIVOS_DE_CONFIG[cuota.motivo]) {
+      return bloquear(campana, informe, { code: cuota.motivo, motivo: MOTIVOS_DE_CONFIG[cuota.motivo] });
     }
     const porEnviar = pendientes({ destinatarios: alcance.destinatarios, envios, informe });
     log(`campanas: ${campana.nombre}: ${alcance.destinatarios.length} recipient(s), ${porEnviar.length} pending, quota ${cuota.permitidos} (${cuota.motivo}), ${cuota.enviadosHoy} sent today`);
@@ -388,6 +399,22 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
         await escribir(() => pb.collection('campanas').update(campana.id, { informe }));
         fallosTransporte.push(`${lead.id}: ${r.code}`);
         log(`campanas: ${campana.nombre}: ${ruta} did not answer for lead ${lead.id} (${r.code}); stopping this campaign`);
+        break;
+      }
+
+      if (!r.ok && esRechazoDeCredencial(r)) {
+        // The shared secret is wrong or rotated. That is true for every
+        // recipient, so treating it per lead would terminally exclude the
+        // whole cartera and "complete" a campaign that wrote to nobody.
+        informe = await bloquear(campana, informe, {
+          code: 'chasis_no_autorizado',
+          motivo: `el chasis rechazó la credencial (HTTP ${r.status}): revisa OUTBOUND_SECRET en ~/.config/brotea/jobs-<slug>.env`, // lang-sweep: allow
+        });
+        // The recipient never left our hands: nothing was sent, so it goes
+        // back to pending rather than staying in flight.
+        informe = { ...informe, en_vuelo: informe.en_vuelo.filter((e) => e.lead !== lead.id) };
+        await escribir(() => pb.collection('campanas').update(campana.id, { informe }));
+        abortado = true;
         break;
       }
 
@@ -460,7 +487,13 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
     // unresolved. A run that aborted on a blockage, one the chassis never
     // answered, or one with a send still in flight has finished nothing —
     // completing there would close the report over an open question.
-    const completada = !abortado && !fallosTransporte.length && informe.en_vuelo.length === 0 && quedan.length === 0;
+    // A campaign that reaches the end having written to NOBODY, while holding
+    // sends it could not resolve, has not finished: it has failed quietly.
+    // Completing it would look like success and leave no way back short of
+    // editing the informe by hand.
+    const nadaEnviadoConDudas = informe.enviados_ids.length === 0 && informe.dudosos.length > 0;
+    const completada = !abortado && !fallosTransporte.length && informe.en_vuelo.length === 0
+      && quedan.length === 0 && !nadaEnviadoConDudas;
     informe = cerrarInforme(informe, { destinatarios: alcance.destinatarios, envios, enviadosEnRun, now, completada });
 
     if (simulados) log(`campanas: ${campana.nombre}: dry run, ${simulados} message(s) would have gone out`);
@@ -482,7 +515,15 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
         const informeManager = await informeDelGestor(campana, informe, envios, alcance.destinatarios);
         informe = { ...informe, informe_manager: informeManager };
         if (informeManager.estado === 'enviado') {
-          await escribir(() => pb.collection('campanas').update(campana.id, { informe }));
+          // If THIS write is the one that fails, the report has gone out and
+          // nothing records it: letting the throw escape would leave `estado`
+          // short of `completada` and the next run would report again. The
+          // close below is the second chance to persist the same informe.
+          try {
+            await escribir(() => pb.collection('campanas').update(campana.id, { informe }));
+          } catch (e) {
+            log(`campanas: ${campana.nombre}: the manager's report went out but could not be recorded yet: ${String(e?.message ?? e).slice(0, 120)}`);
+          }
         }
       }
     } else if (!abortado && informe.runs_sin_envio >= RUNS_SIN_ENVIO_PARA_PAUSAR) {
@@ -495,6 +536,13 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
           en: now.toISOString(), avisado_dia: hoy,
         },
       };
+    }
+
+    if (!completada && !abortado && nadaEnviadoConDudas && quedan.length === 0) {
+      return bloquear(campana, informe, {
+        code: 'nada_enviado',
+        motivo: `la campaña terminó sin enviar nada y con ${informe.dudosos.length} envío(s) sin resolver; revisa el chasis antes de reanudarla`, // lang-sweep: allow
+      });
     }
 
     await escribir(() => pb.collection('campanas').update(campana.id, { informe, ...(estado !== campana.estado ? { estado } : {}) }));

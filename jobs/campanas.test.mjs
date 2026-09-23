@@ -331,6 +331,67 @@ describe('the same person is never written to twice', () => {
     assert.deepEqual(informe.dudosos.map((d) => d.lead), [leadUno.id]);
     assert.equal(informe.rechazos['send failed'], 1);
     assert.equal(informe.enviados, 0, 'we do not claim a send we cannot prove either');
+    assert.notEqual(pb.store.campanas[0].estado, 'completada', 'having written to nobody is not finishing');
+    assert.equal(informe.bloqueo.code, 'nada_enviado');
+  });
+});
+
+describe('an answer about us is never an answer about a lead', () => {
+  it('a rotated shared secret blocks the run and excludes nobody', async () => {
+    const pb = fakePb(datosBase());
+    // What the chassis's secret gate actually answers: a bare sentence, no code.
+    conChasis(() => respuesta(403, { error: 'forbidden' }));
+    const { ctx, mensajes } = contexto(pb);
+    await run(ctx);
+
+    const informe = pb.store.campanas[0].informe;
+    assert.equal(informe.bloqueo.code, 'chasis_no_autorizado');
+    assert.match(informe.bloqueo.motivo, /OUTBOUND_SECRET/);
+    assert.deepEqual(informe.excluidos, [], 'the secret is not a property of the lead');
+    assert.deepEqual(informe.dudosos, []);
+    assert.deepEqual(informe.en_vuelo, [], 'nothing left our hands, so nothing is in flight');
+    assert.equal(pb.store.campanas[0].estado, 'programada');
+    assert.match(mensajes[0], /Campaña bloqueada/);
+
+    // And once the secret is fixed, the same lead is written to normally.
+    conChasis(() => respuesta(200, { ok: true, envio_id: null, activity_id: null }));
+    const segunda = contexto(pb);
+    await run(segunda.ctx);
+    assert.equal(llamadas.length, 2);
+    assert.deepEqual(pb.store.campanas[0].informe.enviados_ids, [leadUno.id]);
+    assert.equal(pb.store.campanas[0].estado, 'completada');
+  });
+
+  it('a chassis that says it is not configured leaves every lead retryable', async () => {
+    const pb = fakePb(datosBase());
+    conChasis(() => respuesta(503, { error: 'smtp not configured' }));
+    for (let i = 0; i < 2; i++) {
+      const { ctx } = contexto(pb);
+      await run(ctx);
+    }
+    const informe = pb.store.campanas[0].informe;
+    assert.deepEqual(informe.dudosos, [], 'a 503 that never reached the mailer is not a maybe-send');
+    assert.equal(informe.reintentos[leadUno.id], 2);
+    assert.equal(informe.rechazos['smtp not configured'], 2);
+    assert.notEqual(pb.store.campanas[0].estado, 'completada');
+
+    // The configuration comes back before the third strike: nobody was lost.
+    conChasis(() => respuesta(200, { ok: true, envio_id: null, activity_id: null }));
+    const tercera = contexto(pb);
+    await run(tercera.ctx);
+    assert.deepEqual(pb.store.campanas[0].informe.enviados_ids, [leadUno.id]);
+  });
+
+  it('a gateway 502 during a redeploy is retryable, not a maybe-send', async () => {
+    const pb = fakePb(datosBase());
+    // Traefik/Coolify answer HTML while the app restarts — not chassis JSON.
+    conChasis(() => new Response('<html>Bad Gateway</html>', { status: 502, headers: { 'Content-Type': 'text/html' } }));
+    const { ctx } = contexto(pb);
+    await run(ctx);
+    const informe = pb.store.campanas[0].informe;
+    assert.deepEqual(informe.dudosos, []);
+    assert.equal(informe.reintentos[leadUno.id], 1);
+    assert.deepEqual(informe.en_vuelo, []);
   });
 });
 
@@ -412,6 +473,43 @@ describe("the manager's report", () => {
     assert.equal(informe.informe_manager.estado, 'no_enviado');
     assert.match(informe.informe_manager.motivo, /no se pudo leer/);
     assert.equal(pb.store.campanas[0].estado, 'completada');
+  });
+
+  it('is not re-sent when the write that records it fails', async () => {
+    const pb = fakePb(datosBase());
+    conGestor(pb);
+    conChasis((url) => {
+      if (url.includes('/send-whatsapp')) return respuesta(200, { ok: true, envio_id: 'envG', actividad_id: 'actG' });
+      return respuesta(200, { ok: true, envio_id: null, activity_id: null });
+    });
+    // The write that records the report — and only that one — fails.
+    const original = pb.collection;
+    let falladas = 0;
+    pb.collection = (nombre) => {
+      const col = original(nombre);
+      if (nombre !== 'campanas') return col;
+      return {
+        ...col,
+        update: async (id, body) => {
+          if (body?.informe?.informe_manager?.estado === 'enviado' && falladas === 0) {
+            falladas++;
+            throw new Error('PATCH campanas → 500');
+          }
+          return col.update(id, body);
+        },
+      };
+    };
+    const { ctx } = contexto(pb);
+    await run(ctx); // must not reject
+    assert.equal(falladas, 1, 'the failing write really happened');
+    // The close is the second chance, so the report IS recorded and the
+    // campaign is finished — the next run has nothing left to report.
+    assert.equal(pb.store.campanas[0].informe.informe_manager.estado, 'enviado');
+    assert.equal(pb.store.campanas[0].estado, 'completada');
+    const reportes = llamadas.filter((l) => l.url.includes('/send-whatsapp')).length;
+    const segunda = contexto(pb);
+    await run(segunda.ctx);
+    assert.equal(llamadas.filter((l) => l.url.includes('/send-whatsapp')).length, reportes, 'told once, ever');
   });
 
   it('sends it once when every precondition is data, not a guess', async () => {
@@ -517,6 +615,33 @@ describe('what stops a campaign, and stops it loudly', () => {
       await run(ctx);
       assert.deepEqual(pb.escrituras, [], `a ${estado} campaign must be left alone`);
     }
+  });
+});
+
+describe('a mistyped field points at itself', () => {
+  it('blocks on a broken intervalo_min instead of pausing three hours later', async () => {
+    conChasis(() => { throw new Error('nothing may be sent'); });
+    const pb = fakePb(datosBase());
+    pb.store.campanas[0].intervalo_min = -10;
+    const { ctx, mensajes } = contexto(pb);
+    await run(ctx);
+    assert.equal(llamadas.length, 0);
+    assert.equal(pb.store.campanas[0].informe.bloqueo.code, 'intervalo_invalido');
+    assert.match(mensajes[0], /intervalo_min/);
+    assert.equal(pb.store.campanas[0].estado, 'programada');
+  });
+
+  it('keeps in-flight sends when the template itself is gone', async () => {
+    conChasis(() => { throw new Error('nothing may be sent'); });
+    const pb = fakePb(datosBase());
+    pb.store.campanas[0].plantilla = '';
+    pb.store.campanas[0].informe = { v: 1, en_vuelo: [{ lead: leadUno.id, desde: '2026-09-23T09:00:00.000Z' }] };
+    const { ctx } = contexto(pb);
+    await run(ctx);
+    const informe = pb.store.campanas[0].informe;
+    assert.equal(informe.bloqueo.code, 'sin_plantilla');
+    assert.deepEqual(informe.en_vuelo.map((e) => e.lead), [leadUno.id], 'an unresolvable entry is not a dudoso');
+    assert.deepEqual(informe.dudosos, []);
   });
 });
 

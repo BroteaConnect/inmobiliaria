@@ -282,7 +282,11 @@ Before every chassis call the recipient is appended to `informe.en_vuelo` and
 the campaign row is patched; the entry is removed once the send is resolved. If
 the patch itself fails, that recipient is skipped **without sending** — an
 unrecorded send is the one that gets doubled later. A surviving entry is
-resolved on the next run by **adoption**: if an `envios` row exists for that
+resolved on the next run by **adoption**, which runs *after* the template gate
+— it needs the template to recognise our own row, and a campaign whose
+`plantilla` was cleared would otherwise file every entry as `dudoso`,
+irreversibly, a moment before the run blocked on `sin_plantilla`. If an
+`envios` row exists for that
 lead **and that exact template**, not already claimed by another campaign, and
 created since then, it is adopted (its `campana` is patched) and counted as
 sent; if not, it moves to `informe.dudosos` and is **never retried**. Adoption
@@ -305,10 +309,26 @@ rewritten after every single send, and the next run repairs it first.
 | answer | what the job does |
 |---|---|
 | `no_email`, `no_phone`, `no_consent`, `consent_revoked`, `template_not_approved`, `outside_window`, any other 4xx | terminal for that lead: `informe.excluidos`, and the campaign can complete |
-| `chassis_timeout`, `chassis_unreachable`, `provider_unavailable`, 429, Twilio `63018` | retryable, because the chassis said in so many words that nothing left: stays pending, `informe.reintentos[lead]++`, given up as `agotado` at 3 |
+| `chassis_timeout`, `chassis_unreachable`, `provider_unavailable`, 429, Twilio `63018`, `not configured` / `smtp not configured` / `pocketbase not configured` | retryable, because the chassis said in so many words that nothing left: stays pending, `informe.reintentos[lead]++`, given up as `agotado` at 3 |
 | `variables_missing` | terminal for the RUN: the same values are built for everybody, so one bug must not burn ten leads |
-| `send failed` and **any unnamed 5xx** | ambiguous, treated exactly like silence (below). `/send-email` returns 502 `send failed` from a catch that also covers the writes it makes *after* the mail has been accepted, so retrying it is how one person gets three copies |
+| **401 / 403** with no per-lead code | terminal for the RUN: `informe.bloqueo = { code: 'chasis_no_autorizado' }`, nobody is excluded, no state changes |
+| `send failed`, and any unnamed 5xx **the chassis itself produced** | ambiguous, treated exactly like silence (below) |
+| a 5xx that is *not* chassis JSON (a Traefik/Coolify page mid-redeploy) | retryable: nothing ever reached the mailer |
 | no answer at all | the entry stays in flight, the run **fails** so Alertas hears, and the next run adopts it or files it as `dudoso` |
+
+Two of those rows are the ones that cost real money. **Authentication is a
+property of the run, not of a lead**: the shared secret travels in the query
+string, so a rotated one answers 403 for every recipient — classified per lead
+it would file the whole cartera as terminally excluded, "complete" a campaign
+that wrote to nobody, and leave no way back but editing the `informe` by hand.
+A wrong credential is the same class of problem as a missing one, and blocks
+the same way. And **ambiguity is narrow on purpose**: only a 5xx the chassis
+wrote itself, with no code we know, may have been sent. Its `… not configured`
+answers and an infrastructure error page are known non-sends, and treating them
+as maybes would lose every recipient to `dudoso` — permanently — for a
+redeploy. As a last guard, a campaign that reaches the end having sent
+**nothing** while holding unresolved sends is blocked (`nada_enviado`) rather
+than completed: quiet failure must not look like success.
 
 Only a chassis that never answered — or answered ambiguously — makes `run()`
 throw. Business refusals never do: three throws in one Madrid day open the
@@ -330,8 +350,9 @@ row `campanas.gestor` naming a lead, that lead existing with a phone, and the
 `campana.informe` template being `approved`. Any one missing and **no call is
 made**, with the exact missing precondition recorded in
 `informe.informe_manager` and echoed in the Telegram line. It is sent **once,
-ever**: the result is written on its own the moment it is known, so a closing
-write that fails cannot make the next run report the same campaign twice.
+ever**: the result is written on its own the moment it is known, and if *that*
+write is the one that fails it is caught — the closing write is the second
+chance to persist it — so no failure mode reports the same campaign twice.
 
 ### The catalog
 

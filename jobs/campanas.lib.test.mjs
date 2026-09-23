@@ -4,7 +4,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MAX_ENLACES_FALLIDOS, MAX_ENVIOS_POR_RUN, MAX_REINTENTOS_LEAD, SEGMENTO_VERSION, SegmentoInvalido, VARIABLES_DEL_CHASIS,
-  aplicarEnvio, aplicarRechazo, cerrarInforme, cuotaDelRun, dentroDeHorario, enviadosHoy, esRechazoAmbiguo, esRechazoTerminal,
+  aplicarEnvio, aplicarRechazo, cerrarInforme, cuotaDelRun, dentroDeHorario, enviadosHoy, esRechazoAmbiguo,
+  esRechazoDeCredencial, esRechazoTerminal,
   evaluarSegmento, hhmmAMinutos, informeInicial, minutosMadrid, payloadCompletada, pendientes, plantillaLista,
   problemasSegmento, textoCampanaArmada, textoCampanaBloqueada, textoCampanaCompletada, textoCampanaPausada,
   variablesPara,
@@ -312,6 +313,25 @@ describe('esRechazoTerminal', () => {
   });
 });
 
+describe('esRechazoDeCredencial', () => {
+  it('claims a 401/403 with no lead-specific code: the secret, not the person', () => {
+    // The chassis's secret gate answers a bare {error:'forbidden'} — no code.
+    assert.equal(esRechazoDeCredencial({ code: 'forbidden', status: 403 }), true);
+    assert.equal(esRechazoDeCredencial({ code: 'http_401', status: 401 }), true);
+  });
+
+  it('leaves a real per-lead refusal alone even on those statuses', () => {
+    assert.equal(esRechazoDeCredencial({ code: 'no_consent', status: 403 }), false);
+    assert.equal(esRechazoDeCredencial({ code: 'forbidden', status: 400 }), false);
+  });
+
+  it('is never ambiguous and never terminal-for-the-lead', () => {
+    assert.equal(esRechazoAmbiguo({ code: 'forbidden', status: 403 }), false);
+    // It is terminal only in the sense that the RUN stops; the job must not
+    // put it through aplicarRechazo, which is what the job-level test pins.
+  });
+});
+
 describe('esRechazoAmbiguo', () => {
   it('claims the answers that arrive after the message may already have left', () => {
     // /send-email answers this literal sentence — with a space, not an
@@ -328,6 +348,21 @@ describe('esRechazoAmbiguo', () => {
       assert.equal(esRechazoAmbiguo({ code, status: 422 }), false, code);
     }
     assert.equal(esRechazoAmbiguo({ code: 'nunca_visto', status: 400 }), false, 'a 4xx never left');
+  });
+
+  it('never claims a 5xx the chassis did not write itself', () => {
+    // Traefik or Coolify while the app restarts: an HTML page, and nothing
+    // ever reached the mailer. Ambiguity here would file every recipient as
+    // dudoso — permanently — for a redeploy.
+    assert.equal(esRechazoAmbiguo({ code: 'http_502', status: 502, json: false }), false);
+    assert.equal(esRechazoAmbiguo({ code: 'http_502', status: 502, json: true }), true);
+  });
+
+  it('never claims the chassis saying it is not configured', () => {
+    for (const code of ['not configured', 'smtp not configured', 'pocketbase not configured', 'outbound email not configured']) {
+      assert.equal(esRechazoAmbiguo({ code, status: 503, json: true }), false, code);
+      assert.equal(esRechazoTerminal({ code, status: 503 }), false, `${code} must stay retryable`);
+    }
   });
 });
 
@@ -388,6 +423,16 @@ describe('who has already been written to', () => {
     assert.equal(informe.enviados, 1);
   });
 
+  it('counts people, so a lead missing from the ledger cannot hide behind another', () => {
+    // b is in the ledger, a only in the informe: two people, and comparing
+    // two lengths would have said one.
+    const a = lead(); const b = lead();
+    const informe = cerrarInforme(aplicarEnvio(informeInicial(), { lead: a.id, now: NOW }), {
+      destinatarios: [a, b], envios: [envio({ lead: b.id })], enviadosEnRun: 1, now: NOW,
+    });
+    assert.equal(informe.enviados, 2);
+  });
+
   it('caps the broken-link list: the informe is rewritten after every send', () => {
     const enlaces = Array.from({ length: MAX_ENLACES_FALLIDOS + 10 }, (_, i) => ({ envio_id: `e${i}`, lead: `l${i}`, error: 'x' }));
     const out = informeInicial({ enlaces_fallidos: enlaces });
@@ -418,7 +463,9 @@ describe('pendientes', () => {
 
 describe('cerrarInforme', () => {
   it('re-reads the counters from the ledger and tracks quiet runs', () => {
-    const envios = [envio({ estado: 'entregado' }), envio({ estado: 'enviado' }), envio({ estado: 'error' })];
+    // One row per person: `enviados` counts PEOPLE written to, so the ledger
+    // and the informe are unioned by lead and never double-counted.
+    const envios = [envio({ lead: 'l1', estado: 'entregado' }), envio({ lead: 'l2', estado: 'enviado' }), envio({ lead: 'l3', estado: 'error' })];
     const inf = cerrarInforme(informeInicial(), { destinatarios: [lead(), lead()], envios, enviadosEnRun: 0, now: NOW });
     assert.equal(inf.destinatarios, 2);
     assert.equal(inf.enviados, 2);
