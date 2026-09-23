@@ -284,7 +284,7 @@
       }
     },
     {
-      "$comment": "Message templates, one row per `clave` and channel. A template is written once in both app languages and sent through email or WhatsApp; `evento` names the lead lifecycle event that triggers it, `version` is bumped on every edit so `envios.plantilla_version` records what was actually sent. WhatsApp templates must be approved by Twilio before use: `content_sid` is the Content API id and `content_estado` stores Twilio's status verbatim. `clave` uniqueness is not expressible in this format — the CRM reads before it writes.",
+      "$comment": "Message templates, one row per `clave` and channel. A template is written once in both app languages and sent through email or WhatsApp; `evento` names the lead lifecycle event that triggers it, `version` is bumped on every edit so `envios.plantilla_version` records what was actually sent. WhatsApp templates must be approved by Twilio before use: `content_sid`/`content_estado`/`content_motivo` describe the Spanish Twilio Content and `content_sid_en`/`content_estado_en`/`content_motivo_en` the English one; both are created by one chassis `/content/submit`. `clave` uniqueness is not expressible in this format — the CRM reads before it writes, and `pb/plantillas.json` is the catalog of record (seeded by `pb/plantillas.mjs`).",
       "name": "plantillas",
       "fields": [
         {
@@ -383,6 +383,29 @@
         },
         {
           "name": "content_motivo",
+          "type": "text"
+        },
+        {
+          "name": "content_sid_en",
+          "type": "text",
+          "max": 40
+        },
+        {
+          "name": "content_estado_en",
+          "type": "select",
+          "maxSelect": 1,
+          "values": [
+            "unsubmitted",
+            "received",
+            "pending",
+            "approved",
+            "rejected",
+            "paused",
+            "disabled"
+          ]
+        },
+        {
+          "name": "content_motivo_en",
           "type": "text"
         },
         {
