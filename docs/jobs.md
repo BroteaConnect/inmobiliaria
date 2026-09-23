@@ -28,6 +28,7 @@ aislamiento de fallos, reintentos) es del chasis y no se copia.
 | `jobs/resumen.mjs` | 20:00 | Resumen del día: leads nuevos, importados a la cartera, contactos salientes por canal, mensajes entrantes, emails entregados y propiedades publicadas. |
 | `jobs/campanas.mjs` | hourly | Only when a campaign pauses or completes (see [campanas](#campanas)). |
 | `jobs/matcher.mjs` | 09:30 | Shortlist de leads que encajan con cada propiedad publicada o tocada en las últimas 24 h (ver [matcher](#matcher)). |
+| `jobs/unanswered.mjs` | hourly | A lead whose WhatsApp/email has waited more than **2 h** with no outbound row, once per unanswered streak, 09:00–21:00 only (see [unanswered](#unanswered)). |
 
 **El silencio es una feature**: si no hay leads desatendidos o el día está
 vacío, no se envía nada. Un canal que solo habla cuando hay algo que decir
@@ -148,6 +149,31 @@ Out of scope until E5: the WhatsApp half of the flow — asking the lead
 business-initiated WhatsApp message needs a Twilio Content template (or the
 lead's own 24-hour window, which a lead who wrote weeks ago no longer has);
 that template is E5's deliverable, and the matcher will call it from there.
+
+## unanswered
+
+`jobs/unanswered.mjs` (hourly; rules in `jobs/unanswered.lib.mjs`) reads the
+last 48 h of `actividades` and, per lead, oldest first: an outbound row of
+**any** tipo (a `nota` typed as `saliente` included) closes the streak, and
+the first inbound `whatsapp`/`email` after it opens the next one. That first
+inbound is the **anchor**: one alert per unanswered streak, however many
+messages the lead sends while waiting. An anchor between 2 h and 24 h old is
+alerted; an older one is the 09:00 agenda's job. An inbound `llamada` opens
+no streak (a lead does not call in through the CRM). No stage or consent
+exclusion; the lead in job secret `CAMPAIGN_REPORT_LEAD_ID` (the manager) is
+never alerted.
+
+- Log line, always (the E6 gate reads it): `unanswered: <n> lead(s) waiting over 2h`.
+- Quiet hours: alerts go out only 09:00–21:00 Madrid. Outside, the job logs
+  `unanswered: holding <k> alert(s) until 09:00` and writes nothing; the
+  first run after 09:00 sends them.
+- One `lead.unanswered_alert` `{lead_id, activity_id, waited_min}` event per
+  alerted lead, then the marker, then one Telegram message (lead, channel,
+  wait, assigned agent → on-duty agent → "sin asignar").
+- Marker: settings row `jobs.unanswered` = `{v: 1, alerted: {<activity id>:
+  <ISO>}}`, pruned to 7 days — the anchors already alerted. Under
+  `--dry-run` it is not written (the job logs `dry-run: would write
+  jobs.unanswered`).
 
 ## campanas
 

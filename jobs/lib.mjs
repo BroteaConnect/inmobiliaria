@@ -57,8 +57,13 @@ const madridHeader = new Intl.DateTimeFormat('es-ES', {
   timeZone: 'Europe/Madrid', weekday: 'long', day: 'numeric', month: 'long',
 });
 
-const escapeHtml = (s) =>
+export const escapeHtml = (s) =>
   String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// The first word of a name, for a line that talks ABOUT a person rather than
+// TO the team: "María José Pérez" → "María". Empty for a missing name; the
+// caller decides the placeholder. Cut to MAX_NOMBRE, never escaped here.
+export const firstName = (nombre) => String(nombre ?? '').trim().split(/\s+/)[0].slice(0, MAX_NOMBRE);
 
 // The one call to action every digest ends with (agenda and shortlist alike).
 export const PIE_CRM = 'Abre el CRM y dales salida: https://crm-inmobiliaria.brotea.dev';
@@ -137,7 +142,7 @@ export const horaMadrid = (date) => {
 // escaping: propiedades.titulo has no max, and ten long titles would push the
 // digest past Telegram's 4096 chars after the event row is already written.
 // Returns null when there are no visits.
-const recorta = (s) => escapeHtml(String(s).slice(0, MAX_NOMBRE));
+export const recorta = (s) => escapeHtml(String(s).slice(0, MAX_NOMBRE));
 export function textoVisitas(visitas, now) {
   if (!visitas.length) return null;
   const lines = visitas.slice(0, MAX_LINES).map((v) => {
