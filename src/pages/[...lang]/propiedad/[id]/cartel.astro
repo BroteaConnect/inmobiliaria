@@ -1,0 +1,231 @@
+---
+// The printable poster of one property: /propiedad/<id>/cartel and
+// /en/propiedad/<id>/cartel. One A4 sheet for a shop window or a street
+// door, with a QR that opens the property page marked `origen=cartel`, so a
+// lead that walks in from the poster is counted as one.
+//
+// Rendered per request like the property page, and for the same reason: the
+// CRM publishes every day. The QR is drawn here, on the server, as inline SVG:
+// the sheet needs no JavaScript and no image request to print, and the QR
+// encoder never reaches a browser.
+import Layout from '../../../../layouts/Layout.astro';
+import { DEFAULT_LOCALE, localeOf, localePath, t, unknownLocale } from '../../../../lib/i18n';
+import { metaOf, photoUrl, priceOf, realPrice } from '../../../../lib/property';
+import { publishedProperty } from '../../../../lib/property.server';
+import { posterTarget, qrSvg } from '../../../../lib/poster.mjs';
+
+export const prerender = false;
+
+// Same rules as the property page: a language that does not exist or a
+// deeper path nobody wrote (`[...lang]` answers any prefix) is a 404, a draft
+// or an unknown id is a 404, and an unreachable database is a 503.
+const badLocale = unknownLocale(Astro);
+const locale = badLocale ? DEFAULT_LOCALE : localeOf(Astro);
+const id = String(Astro.params.id ?? '');
+const lookup = badLocale ? 'missing' : await publishedProperty(id);
+const p = typeof lookup === 'string' ? null : lookup;
+
+if (!p) Astro.response.status = lookup === 'error' ? 503 : 404;
+Astro.response.headers.set('Cache-Control', p ? 'public, max-age=60, stale-while-revalidate=300' : 'no-store');
+// A poster is a print artefact of a page that is already indexed: listing it
+// too would put two results for one home in front of a buyer.
+const ROBOTS = 'noindex, nofollow';
+Astro.response.headers.set('X-Robots-Tag', ROBOTS);
+
+const title = (p?.titulo ?? '').trim();
+const target = p ? posterTarget(Astro.site ?? Astro.url.origin, locale, id, DEFAULT_LOCALE) : '';
+const qr = p ? qrSvg(target, t(locale, 'poster.qrLabel')) : '';
+const photo = p ? photoUrl(p, 0) : '';
+const meta = p ? metaOf(locale, p) : '';
+const price = p ? realPrice(p) : 0;
+---
+
+{p ? (
+  <Layout locale={locale} title={t(locale, 'poster.title', { titulo: title })} bare robots={ROBOTS} theme="light">
+    <nav class="acciones" aria-label={t(locale, 'poster.print')}>
+      <a class="volver" href={localePath(locale, `/propiedad/${id}`)}>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 5l-7 7 7 7"/></svg>
+        <span>{t(locale, 'poster.back')}</span>
+      </a>
+      <button type="button" class="button" data-print>{t(locale, 'poster.print')}</button>
+      <p class="pista">{t(locale, 'poster.hint')}</p>
+    </nav>
+
+    <article class="cartel" data-propiedad={id}>
+      <header class="cabecera">
+        <p class="eyebrow">
+          <span>{t(locale, 'poster.eyebrow')}</span>
+          {p.municipio && <span class="municipio">{p.municipio}</span>}
+        </p>
+        <h1>{title}</h1>
+      </header>
+
+      {photo && <img class="foto photo" src={photo} alt="" width="1200" height="800" fetchpriority="high" decoding="async" />}
+
+      <div class="datos">
+        <p class="precio data" data-precio={price || undefined}>{priceOf(locale, p)}</p>
+        {meta && <p class="meta data">{meta}</p>}
+      </div>
+
+      <div class="codigo">
+        <div class="qr" set:html={qr} />
+        <p class="escanea">{t(locale, 'poster.scan')}</p>
+        <p class="url data">{target}</p>
+      </div>
+
+      <footer class="agencia">
+        <p class="marca">{t(locale, 'site.name')}</p>
+        <p class="telefono data" data-telefono hidden></p>
+      </footer>
+    </article>
+  </Layout>
+) : (
+  <Layout locale={locale} title={t(locale, 'prop.notFound.title')} back robots={ROBOTS}>
+    <section class="missing">
+      <h1>{t(locale, 'prop.notFound.title')}</h1>
+      <p>{t(locale, lookup === 'error' ? 'prop.error.text' : 'prop.notFound.text')}</p>
+      <a class="button" href={localePath(locale, '/')}>{t(locale, 'nav.catalog')}</a>
+    </section>
+  </Layout>
+)}
+
+<script>
+  import { fmtMoney, localeFromPath, t } from '../../../../lib/i18n';
+  import { currencyOf, loadBusiness } from '../../../../lib/negocio';
+
+  const cartel = document.querySelector<HTMLElement>('.cartel');
+  document.querySelector<HTMLButtonElement>('[data-print]')?.addEventListener('click', () => window.print());
+
+  if (cartel) {
+    const locale = localeFromPath(location.pathname);
+    // The phone line exists only when the owner set one in the CRM: a poster
+    // is printed once and stays up for weeks, so it never says "pending".
+    loadBusiness().then((d) => {
+      const telefono = (d.telefono ?? '').trim();
+      const line = cartel.querySelector<HTMLElement>('[data-telefono]');
+      if (line && telefono) {
+        line.textContent = t(locale, 'poster.phone', { telefono });
+        line.hidden = false;
+      }
+      // The price in the owner's currency, as on the property page.
+      const price = cartel.querySelector<HTMLElement>('.precio[data-precio]');
+      const moneda = currencyOf(d);
+      const n = Number(price?.dataset.precio);
+      if (price && moneda && n > 0) price.textContent = fmtMoney(locale, n, moneda);
+    });
+  }
+</script>
+
+<style>
+  .acciones {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+  }
+  .volver {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 44px;
+    font-weight: 600;
+    text-decoration: none;
+    color: var(--primary);
+  }
+  .volver:hover span { text-decoration: underline; text-underline-offset: 3px; }
+  .pista { flex-basis: 100%; margin: 0; color: var(--muted); font-size: var(--text-note); }
+
+  .cartel {
+    display: grid;
+    gap: var(--space-4);
+    max-width: 48rem;
+    margin: 0 auto;
+    color: var(--text);
+  }
+  .cabecera { display: grid; gap: var(--space-2); }
+  .eyebrow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin: 0;
+    font-size: var(--text-eyebrow);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .municipio { color: var(--primary); }
+  .cabecera h1 {
+    margin: 0;
+    font-size: var(--text-display-xl);
+    font-weight: 700;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+  }
+  .foto {
+    width: 100%;
+    height: auto;
+    max-height: 26rem;
+    aspect-ratio: 3 / 2;
+    object-fit: cover;
+    border-radius: var(--radius-lg);
+  }
+  .datos { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-4); }
+  .precio { margin: 0; font-weight: 700; font-size: var(--text-data-lg); color: var(--accent); }
+  .meta { margin: 0; color: var(--muted); font-size: var(--text-data); font-weight: 500; }
+
+  .codigo { display: grid; justify-items: center; gap: var(--space-2); text-align: center; }
+  .qr { width: min(70%, 20rem); color: var(--text); background: var(--bg); line-height: 0; }
+  .qr :global(svg) { display: block; width: 100%; height: auto; }
+  .escanea { margin: 0; font-size: var(--text-title); font-weight: 600; text-wrap: balance; }
+  .url { margin: 0; font-size: var(--text-note); color: var(--muted); overflow-wrap: anywhere; }
+
+  .agencia {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--space-2);
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-3);
+  }
+  .agencia p { margin: 0; }
+  .marca { font-family: var(--font-display); font-weight: 700; font-size: var(--text-title); }
+  .telefono { font-weight: 600; font-size: var(--text-data-lg); }
+  .telefono[hidden] { display: none; }
+
+  .missing { max-width: 52ch; display: grid; gap: var(--space-3); justify-items: start; padding: var(--space-6) 0; }
+  .missing h1 { font-size: var(--text-display-lg); margin: 0; }
+  .missing p { color: var(--muted); margin: 0; }
+
+  /* One A4 sheet, portrait. Physical units live only here and in the print
+     block below: a printer measures paper, so the sheet is budgeted in the
+     paper's own unit. 297mm minus two 12mm margins leaves 273mm; the poster
+     takes 271mm (rounding slack) and the photo absorbs whatever the title,
+     the facts and the QR leave, so a long title shrinks the photo instead
+     of pushing the agency line onto a second sheet. */
+  @page { size: A4 portrait; margin: 12mm; }
+  @media print {
+    .acciones { display: none; }
+    :global(main:has(.cartel)) { padding: 0; max-width: none; }
+    .cartel {
+      max-width: none;
+      height: 271mm;
+      overflow: hidden;
+      gap: var(--space-3);
+      break-inside: avoid;
+      align-content: space-between;
+    }
+    .cartel:has(.foto) { grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
+    .cabecera h1 { -webkit-line-clamp: 2; line-clamp: 2; }
+    .foto { height: 100%; min-height: 0; max-height: none; aspect-ratio: auto; }
+    .qr { width: min(45%, 80mm); }
+  }
+</style>

@@ -58,6 +58,7 @@ const { locale, propertyId, title } = Astro.props;
   import { create } from '../lib/pb';
   import { localeFromPath, t } from '../lib/i18n';
   import { loadBusiness } from '../lib/negocio';
+  import { decideOrigin, leadOrigin, originKey as keyOf } from '../lib/lead-origin.mjs';
 
   const root = document.querySelector<HTMLElement>('[data-lead]');
   if (root) {
@@ -68,6 +69,23 @@ const { locale, propertyId, title } = Astro.props;
     const status = root.querySelector<HTMLElement>('#interes-status')!;
     const hecho = root.querySelector<HTMLElement>('#interes-hecho')!;
     const title = root.dataset.title ?? '';
+
+    // A visitor who arrived by scanning a poster keeps counting as one for
+    // this property while the tab lives, even after the URL loses its query
+    // (a reload from the history, a detour to the catalogue and back).
+    const propertyId = form.querySelector<HTMLInputElement>('input[name="propiedad"]')?.value ?? '';
+    const originKey = keyOf(propertyId);
+    const remember = () => {
+      try {
+        if (leadOrigin(location.search) === 'cartel') sessionStorage.setItem(originKey, 'cartel');
+      } catch { /* storage refused: the query alone still decides below */ }
+    };
+    const originOf = () => {
+      let stored: string | null = null;
+      try { stored = sessionStorage.getItem(originKey); } catch { /* storage refused: the URL alone decides */ }
+      return decideOrigin(location.search, stored);
+    };
+    remember();
 
     /**
      * La pantalla de después: quién ha quedado en llamar y cuándo, no un
@@ -92,23 +110,25 @@ const { locale, propertyId, title } = Astro.props;
       e.preventDefault();
       const data = Object.fromEntries(new FormData(form)) as Record<string, string>;
       status.textContent = _('form.sending');
+      const origen = originOf();
       try {
         const created = await create<{ id: string }>('leads', {
           nombre: data.nombre, telefono: data.telefono, email: data.email,
-          mensaje: data.mensaje, propiedad: data.propiedad, etapa: 'nuevo', origen: 'web',
+          mensaje: data.mensaje, propiedad: data.propiedad, etapa: 'nuevo', origen,
           franja: data.franja || undefined,
           consentimiento: true,
           consentimiento_en: new Date().toISOString(),
           // El texto exacto que se aceptó, sin etiquetas: es la prueba.
           consentimiento_texto: (_('form.consent') || '').replace(/<[^>]+>/g, '').trim().slice(0, 300),
         });
-        // Aviso inmediato al topic del proyecto (chasis: requirements-api → Telegram)
+        // Aviso inmediato al topic del proyecto (chasis: requirements-api → Telegram).
+        // `source` stays lead_web: the chassis assigns the on-duty agent by it.
         fetch('https://api.brotea.dev/requirements', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             project: 'inmobiliaria', source: 'lead_web', lead_id: created.id,
             submitted_by: `${data.nombre} <${data.telefono}>`,
-            content: `LEAD para "${title}": ${data.mensaje || '(sin mensaje)'} — ${data.email || 'sin email'}`,
+            content: `LEAD${origen === 'cartel' ? ' (cartel)' : ''} para "${title}": ${data.mensaje || '(sin mensaje)'} — ${data.email || 'sin email'}`,
           }),
         }).catch(() => {});
         form.reset();

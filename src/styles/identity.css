@@ -63,7 +63,11 @@
     --border: #1E3D3B;
   }
 }
+/* A page that pins a theme pins the browser's own chrome too (form
+ * controls, scrollbars): the printable poster forces light. */
+:root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #0C2423;
   --surface: #123231;
   --text: #F2EEE3;
