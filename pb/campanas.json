@@ -1,0 +1,39 @@
+[
+  {
+    "nombre": "CU-15 · Consentimiento a la cartera histórica",
+    "plantilla": "consentimiento.solicitud",
+    "segmento": {
+      "v": 1,
+      "origen": ["histórico"],
+      "consentimiento": false,
+      "max": 216,
+      "variables": { "agencia": "Inmobiliaria" }
+    },
+    "lote_diario": 30,
+    "intervalo_min": 10,
+    "hora_desde": "10:00",
+    "hora_hasta": "18:00",
+    "estado": "borrador",
+    "nota": "WhatsApp and not email, because of the data: of the 216 leads whose origen is 'histórico' on the live instance (checked 2026-09-23), 0 have an email address and 191 have a phone. There is deliberately no canal_preferido and no idioma key — both fields are empty on all 216, and a filter on an empty field matches nobody, which would complete the campaign as '0 destinatarios' having done nothing. 'agencia' is the project's own name until the owner writes the real one from the CRM's Ajustes: there is no negocio.* settings row to read it from and inventing an agency name is not ours to do. It stays in borrador: the template still has to be submitted to Twilio Content and approved by Meta before a single message can leave."
+  },
+  {
+    "nombre": "Ensayo E5 G9 · reactivación (borrar)",
+    "plantilla": "lead.reactivacion.email",
+    "segmento": {
+      "v": 1,
+      "incluye_ids": ["1dlh5ldb9rlwpra"],
+      "max": 1,
+      "variables": {
+        "municipio": "Madrid",
+        "n_propiedades": "5",
+        "url": "https://inmobiliaria.brotea.dev"
+      }
+    },
+    "lote_diario": 1,
+    "intervalo_min": 0,
+    "hora_desde": "08:00",
+    "hora_hasta": "22:00",
+    "estado": "programada",
+    "nota": "The rehearsal row for the E5 G9 gate: one message to one lead, then delete it. 'n_propiedades': '5' and 'municipio': 'Madrid' are a SNAPSHOT of the live instance on 2026-09-23 (12 published properties, 5 of them in Madrid), not a rule — a real recurring campaign has to compute them at send time, which is why they are literals in a segment and not a feature. lead.reactivacion.email also declares baja_url; it is minted and signed by the chassis and must never be set here."
+  }
+]
