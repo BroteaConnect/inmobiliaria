@@ -51,6 +51,14 @@ if (invalid.length) {
   for (const p of invalid) console.error(`✖ plantillas: ${p}`);
   process.exit(2);
 }
+// The bodies the seed would POST, built and checked here — before credentials,
+// before auth — so a create PocketBase would 400 fails with nothing contacted,
+// in the dry-run and in the live run alike.
+const bodyProblems = rows.flatMap((row) => missingOnCreate(createBody(row)).map((f) => `${row.clave}: create body lacks ${f}`));
+if (bodyProblems.length) {
+  for (const p of bodyProblems) console.error(`✖ plantillas: ${p}`);
+  process.exit(2);
+}
 
 // -- credentials (never printed) ------------------------------------------------------
 const credFile = join(homedir(), '.config', 'brotea', `pb-${slug}.env`);
@@ -137,11 +145,7 @@ for (const row of rows) {
   const say = (verb) => console.log(`plantillas: ${clave} ${verb}${suffix}`);
 
   if (!current) {
-    // Built in both modes: the dry-run validates the very body the live run sends.
-    const body = createBody(row);
-    for (const field of missingOnCreate(body)) console.error(`✖ plantillas: ${clave}: create body lacks ${field}`);
-    if (missingOnCreate(body).length) process.exit(2);
-    if (!dryRun) await write(clave, 'POST', COL, body);
+    if (!dryRun) await write(clave, 'POST', COL, createBody(row)); // validated above, before any I/O
     counts.created++;
     say('created');
     continue;
