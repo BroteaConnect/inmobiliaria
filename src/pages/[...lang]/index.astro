@@ -1,11 +1,14 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import WhatsAppDoor from '../../components/WhatsAppDoor.astro';
 import { localePaths, t } from '../../lib/i18n';
 
 // One file, every language: / (es) and /en/ come from src/locales/config.json.
 export const getStaticPaths = localePaths;
 const { locale } = Astro.props;
+
+// Rooms chips: "n or more". The first control named `hab` in DOM order is the
+// lowest value, so a script that picks "the rooms control" lands on 1.
+const ROOMS = [1, 2, 3, 4];
 ---
 
 <Layout locale={locale}>
@@ -15,17 +18,57 @@ const { locale } = Astro.props;
     <div class="hero-filete" aria-hidden="true"></div>
   </section>
 
+  <!-- The filters are a plain GET form so the URL is the state: a filtered
+       view is a link an agent can send. The script keeps the address in sync
+       with replaceState and never lets the form navigate; without JavaScript
+       the same form submits to the same page, and the script reads the URL. -->
+  <form data-filters class="filtros" method="get" action="" aria-label={t(locale, 'filters.title')}>
+    <fieldset class="filtros-grupo">
+      <legend>{t(locale, 'filters.town')}</legend>
+      <div class="chips" data-town-chips>
+        <label class="chip">
+          <input type="radio" name="municipio" value="" checked />
+          <span>{t(locale, 'filters.townAny')}</span>
+        </label>
+      </div>
+    </fieldset>
+    <div class="filtros-precio">
+      <label>
+        {t(locale, 'filters.min')}
+        <input type="number" name="min" inputmode="numeric" min="0" />
+      </label>
+      <label>
+        {t(locale, 'filters.max')}
+        <input type="number" name="max" inputmode="numeric" min="0" />
+      </label>
+    </div>
+    <fieldset class="filtros-grupo">
+      <legend>{t(locale, 'filters.rooms')}</legend>
+      <div class="chips">
+        {ROOMS.map((n) => (
+          <label class="chip">
+            <input type="radio" name="hab" value={n} />
+            <span>{t(locale, 'filters.roomsMin', { n })}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+    <div class="filtros-pie">
+      <p class="filtros-cuenta data" role="status" data-filters-count></p>
+      <button type="button" class="filtros-quitar" data-filters-reset>{t(locale, 'filters.reset')}</button>
+    </div>
+  </form>
+  <p class="filtros-vacio" data-filters-empty hidden>{t(locale, 'filters.empty')}</p>
+
   <div id="catalogo" class="catalogo" aria-live="polite">
     <p class="cargando">{t(locale, 'catalog.loading')}</p>
   </div>
 
-  <WhatsAppDoor class="wa-barra" label={t(locale, 'wa.barra')} message={t(locale, 'wa.mensajeGeneral')} />
-
   <script>
-    import { list, pbUrl } from '../../lib/pb';
+    import { listAll, pbUrl } from '../../lib/pb';
     import { localeFromPath, localePath, t } from '../../lib/i18n';
     import { loadBusiness, currencyOf } from '../../lib/negocio';
-    import { DEFAULT_CURRENCY, noteOf, photoUrl, photos, metaOf, priceOf, type Property } from '../../lib/property';
+    import { DEFAULT_CURRENCY, noteOf, photoUrl, photos, metaOf, priceOf, realPrice, type Property } from '../../lib/property';
 
     // Astro bundles this script ONCE for every generated route, so the locale
     // cannot be compiled in: it is resolved from the URL at runtime — the same
@@ -46,6 +89,10 @@ const { locale } = Astro.props;
     let moneda = DEFAULT_CURRENCY;
 
     const cat = document.getElementById('catalogo')!;
+    const form = document.querySelector<HTMLFormElement>('form[data-filters]')!;
+    const townChips = form.querySelector<HTMLElement>('[data-town-chips]')!;
+    const countLine = form.querySelector<HTMLElement>('[data-filters-count]')!;
+    const emptyLine = document.querySelector<HTMLElement>('[data-filters-empty]')!;
     let props: Property[] = [];
 
     // Placeholder sin foto: silueta de casa en SVG (sin emojis).
@@ -54,7 +101,122 @@ const { locale } = Astro.props;
     const esc = (s: unknown) => String(s ?? '')
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+    // ---- Filters: the URL is the state, the list in memory is the data ----
+    //
+    // `?municipio=&min=&max=&hab=` are read on load and rewritten on every
+    // change with replaceState, so nothing reloads and nothing is fetched
+    // again: the cards are already on the page and only get shown or hidden.
+    interface Filters { town: string; min: number | null; max: number | null; rooms: number | null }
+
+    const fold = (s: string) => s.trim().toLocaleLowerCase();
+    // A price bound: a non-negative number, or nothing. Anything else is nothing.
+    const bound = (v: string | null | undefined): number | null => {
+      if (v == null || v.trim() === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    };
+    // Rooms: a whole number of at least one, or nothing ("any").
+    const roomsOf = (v: string | null | undefined): number | null => {
+      const n = Math.floor(Number(v));
+      return v != null && v.trim() !== '' && Number.isFinite(n) && n >= 1 ? n : null;
+    };
+
+    function readFilters(): Filters {
+      const q = new URLSearchParams(location.search);
+      return { town: (q.get('municipio') ?? '').trim(), min: bound(q.get('min')), max: bound(q.get('max')), rooms: roomsOf(q.get('hab')) };
+    }
+
+    function filtersFromForm(): Filters {
+      const d = new FormData(form);
+      const s = (k: string) => { const v = d.get(k); return typeof v === 'string' ? v : ''; };
+      return { town: s('municipio').trim(), min: bound(s('min')), max: bound(s('max')), rooms: roomsOf(s('hab')) };
+    }
+
+    // Empty params are dropped so a clean view is a clean address; the locale
+    // prefix and the hash are untouched because only `search` is rewritten.
+    function writeUrl(f: Filters) {
+      const q = new URLSearchParams();
+      if (f.town) q.set('municipio', f.town);
+      if (f.min !== null) q.set('min', String(f.min));
+      if (f.max !== null) q.set('max', String(f.max));
+      if (f.rooms !== null) q.set('hab', String(f.rooms));
+      const qs = q.toString();
+      history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
+    }
+
+    // A zero price is not a price (Design Read, tell 10): under any bound it
+    // hides, because nobody can say whether "on request" is within budget.
+    function applyFilters(f: Filters) {
+      const cards = cat.querySelectorAll<HTMLElement>('[data-card]');
+      let shown = 0;
+      cards.forEach((c) => {
+        const town = c.dataset.town ?? '';
+        const price = Number(c.dataset.price) || 0;
+        const rooms = Number(c.dataset.rooms) || 0;
+        const ok = (!f.town || town === f.town || fold(town) === fold(f.town))
+          && (f.rooms === null || rooms >= f.rooms)
+          && (f.min === null || (price > 0 && price >= f.min))
+          && (f.max === null || (price > 0 && price <= f.max));
+        c.hidden = !ok;
+        if (ok) shown += 1;
+      });
+      countLine.textContent = cards.length ? _('filters.count', { count: shown }) : '';
+      emptyLine.hidden = !(cards.length && shown === 0);
+    }
+
+    // One chip per distinct town, built once from the list (render() runs
+    // again when the currency arrives, and the chips must not double up).
+    // Created here, not in the HTML: the towns are data the catalogue holds.
+    function buildTownChips() {
+      if (townChips.querySelectorAll('input').length > 1) return;
+      const seen = new Set<string>();
+      const towns: string[] = [];
+      for (const p of props) {
+        const town = (p.municipio ?? '').trim();
+        if (!town || seen.has(fold(town))) continue;
+        seen.add(fold(town));
+        towns.push(town);
+      }
+      towns.sort((a, b) => a.localeCompare(b, locale));
+      for (const town of towns) {
+        const label = document.createElement('label');
+        label.className = 'chip';
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = 'municipio';
+        input.value = town;
+        const text = document.createElement('span');
+        text.textContent = town;
+        label.append(input, text);
+        townChips.append(label);
+      }
+    }
+
+    // The controls show what the URL says. `.checked`, never `defaultChecked`,
+    // so form.reset() still returns to "any town, any rooms, no bounds".
+    function syncControls(f: Filters) {
+      const towns = form.querySelectorAll<HTMLInputElement>('input[name="municipio"]');
+      let hit = false;
+      towns.forEach((r) => {
+        const on = r.value !== '' && (r.value === f.town || fold(r.value) === fold(f.town));
+        r.checked = on;
+        hit ||= on;
+      });
+      if (!hit && towns[0]) towns[0].checked = !f.town;
+      (form.elements.namedItem('min') as HTMLInputElement).value = f.min === null ? '' : String(f.min);
+      (form.elements.namedItem('max') as HTMLInputElement).value = f.max === null ? '' : String(f.max);
+      form.querySelectorAll<HTMLInputElement>('input[name="hab"]').forEach((r) => { r.checked = Number(r.value) === f.rooms; });
+    }
+
+    const onChange = () => { const f = filtersFromForm(); writeUrl(f); applyFilters(f); };
+    form.addEventListener('input', onChange);
+    form.addEventListener('change', onChange);
+    // Enter in a number input would submit the GET and reload the page.
+    form.addEventListener('submit', (e) => e.preventDefault());
+    form.querySelector('[data-filters-reset]')!.addEventListener('click', () => { form.reset(); onChange(); });
+
     function render() {
+      form.hidden = !props.length;
       if (!props.length) {
         cat.innerHTML = `<p class="cargando">${_('catalog.empty')}</p>`;
         return;
@@ -68,8 +230,11 @@ const { locale } = Astro.props;
         const apunte = noteOf(p);
         const meta = metaOf(locale, p);
         const foto = photoUrl(p, 0, true);
+        // data-town carries the raw value: it is the filter key, matched as
+        // the database wrote it, not as the eyebrow displays it.
         return `
-        <a class="card" href="${esc(localePath(locale, `/propiedad/${p.id}`))}" data-card data-id="${esc(p.id)}">
+        <a class="card" href="${esc(localePath(locale, `/propiedad/${p.id}`))}" data-card data-id="${esc(p.id)}"
+           data-town="${esc(p.municipio ?? '')}" data-price="${realPrice(p)}" data-rooms="${Number(p.habitaciones) || 0}">
           ${foto ? `<img src="${esc(foto)}" alt="${esc(p.titulo)}" width="600" height="400" ${i === 0 ? 'loading="eager" fetchpriority="high"' : 'loading="lazy"'} />` : `<div class="sinfoto">${casaSvg}</div>`}
           ${photos(p).length > 1 ? `<span class="fotos-badge data">${_('card.photos', { count: photos(p).length })}</span>` : ''}
           <div class="card-body">
@@ -82,12 +247,18 @@ const { locale } = Astro.props;
           </div>
         </a>`;
       }).join('');
+      // Same task as the cards: the first frame that has them is already
+      // filtered, so a shared link never flashes the whole catalogue first.
+      buildTownChips();
+      const f = readFilters();
+      syncControls(f);
+      applyFilters(f);
     }
 
     if (pbUrl() && !compartida) {
-      list<Property>('propiedades', { filter: 'estado="publicada"', sort: '-created', perPage: '50' })
-        .then((r) => { props = r.items; render(); })
-        .catch(() => { cat.innerHTML = `<p class="cargando">${_('catalog.error')}</p>`; });
+      listAll<Property>('propiedades', { filter: 'estado="publicada"', sort: '-created' })
+        .then((r) => { props = r; render(); })
+        .catch(() => { form.hidden = true; cat.innerHTML = `<p class="cargando">${_('catalog.error')}</p>`; });
 
       // Los ajustes pueden llegar después del catálogo: se repintan los
       // precios ya escritos.
@@ -117,28 +288,72 @@ const { locale } = Astro.props;
                    background: var(--accent); margin: var(--space-5) 0 0; }
     .hero-filete::after { content: ''; position: absolute; right: -10px; top: -2px;
                           width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+    /* Filters: one row of groups on a laptop, stacked on a phone; the flex
+       wrap decides, nothing else. The town chips are created by the script,
+       which is why every rule here is global. Chips are the same control the
+       lead form's franjas are: a real radio underneath (keyboard, focus and
+       screen readers need it), a 44px surface on top. */
+    .filtros { display: flex; flex-wrap: wrap; align-items: flex-start;
+               gap: var(--space-4) var(--space-6); margin-top: var(--space-6); }
+    .filtros[hidden] { display: none; }
+    .filtros-grupo { border: 0; padding: 0; margin: 0; min-width: 0; }
+    .filtros legend, .filtros-precio label { padding: 0; margin: 0 0 var(--space-2);
+                                             font-weight: 600; font-size: var(--text-data); }
+    .chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+    .chip { position: relative; display: inline-flex; }
+    .chip input { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; }
+    .chip span { display: inline-flex; align-items: center; min-height: 44px;
+                 padding: 0 var(--space-4); border: 1px solid var(--border);
+                 border-radius: var(--radius); background: var(--surface); color: var(--text);
+                 font-weight: 500; font-size: var(--text-data); cursor: pointer;
+                 transition-property: background-color, border-color, color, scale;
+                 transition-duration: var(--duration-press);
+                 transition-timing-function: var(--ease-out); }
+    .chip:hover span { border-color: var(--primary); }
+    .chip:active span { scale: var(--press-scale); }
+    .chip input:checked + span { background: var(--primary); color: var(--primary-contrast);
+                                 border-color: var(--primary); }
+    .chip input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
+    .filtros-precio { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+                      gap: var(--space-3); flex: 0 1 22rem; }
+    .filtros-precio label { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; }
+    .filtros-precio input { min-height: 44px; padding: var(--space-2) var(--space-3);
+                            border: 1px solid var(--border); border-radius: var(--radius);
+                            background: var(--surface); color: var(--text); font: inherit;
+                            font-variant-numeric: tabular-nums; width: 100%;
+                            transition-property: border-color;
+                            transition-duration: var(--duration-press);
+                            transition-timing-function: var(--ease-out); }
+    .filtros-precio input::placeholder { color: var(--muted); }
+    .filtros-precio input:focus-visible { border-color: var(--primary); outline-offset: 1px; }
+    /* The count and the clear control share the last line, whole width. */
+    .filtros-pie { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center;
+                   justify-content: space-between; gap: var(--space-3); }
+    .filtros-cuenta { margin: 0; color: var(--muted); font-size: var(--text-data); }
+    .filtros-quitar { min-height: 44px; padding: 0 var(--space-4); border: 1px solid var(--border);
+                      border-radius: var(--radius); background: transparent; color: var(--primary);
+                      font: inherit; font-weight: 600; cursor: pointer; }
+    .filtros-quitar:hover { border-color: var(--primary); }
+    .filtros-vacio { color: var(--muted); max-width: 52ch; margin: var(--space-4) 0 0; }
+    .filtros-vacio[hidden] { display: none; }
+
     /* Three across on a laptop, two on a tablet, one on a phone — the shell
        decides, the grid just fills it. 300px keeps a card wide enough for a
        3:2 photo to be worth looking at instead of four thin slices. */
     .catalogo { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
                 gap: var(--space-5); margin-top: var(--space-6); }
     .cargando { color: var(--muted); max-width: 52ch; }
-    /* El canal, en verde de WhatsApp y no en el color de marca: aquí el color
-       no es identidad, es el nombre del sitio al que lleva. */
-    .wa-barra { position: fixed; inset: auto 0 0 0; z-index: 40; display: flex; justify-content: center;
-                border-radius: 0;
-                padding: calc(var(--space-3) + env(safe-area-inset-bottom, 0)) var(--space-4) var(--space-3);
-                background: #075E54; color: #fff; text-align: center; font-weight: 600;
-                text-decoration: none; }
-    .wa-barra:hover { filter: brightness(1.08); }
-    /* La barra tapa el final de la página: se le hace sitio. */
-    body:has(.wa-barra:not([hidden])) main { padding-bottom: var(--space-6); }
     .card { position: relative; background: var(--surface); border: 1px solid var(--border);
             border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden;
             display: flex; flex-direction: column; color: inherit; text-decoration: none;
-            transition: transform .18s ease, box-shadow .18s ease; }
+            transition-property: transform, box-shadow;
+            transition-duration: var(--duration-fast);
+            transition-timing-function: var(--ease-out); }
+    /* Explicit: `display: flex` above beats the UA [hidden] rule. */
+    .card[hidden] { display: none; }
     .card:hover { transform: translateY(-3px);
-                  box-shadow: var(--shadow), 0 12px 28px rgba(20, 52, 51, .12); }
+                  box-shadow: var(--shadow), 0 12px 28px color-mix(in srgb, var(--text) 12%, transparent); }
     .card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
     .card img { width: 100%; aspect-ratio: 3/2; object-fit: cover; display: block; }
     .sinfoto { aspect-ratio: 3/2; display: grid; place-items: center;
@@ -159,8 +374,11 @@ const { locale } = Astro.props;
            transition-property: filter, transform, box-shadow; transition-duration: var(--duration-press); transition-timing-function: var(--ease-out); }
     .card:hover .ver { filter: brightness(1.06); box-shadow: var(--shadow); }
     .card:active .ver { transform: translateY(1px); filter: brightness(.97); }
+    /* Overlay chrome on a photograph: the ink at 72% over the picture, the
+       surface colour for the figure, as the gallery arrows do it. */
     .fotos-badge { position: absolute; top: var(--space-2); right: var(--space-2);
-                   background: rgba(20, 52, 51, .72); color: #FBF9F4; border-radius: var(--radius);
+                   background: color-mix(in srgb, var(--text) 72%, transparent); color: var(--surface);
+                   border-radius: var(--radius);
                    padding: .2rem .55rem; font-size: .8rem; font-weight: 500;
                    letter-spacing: .01em; line-height: 1.4; pointer-events: none; }
   </style>
