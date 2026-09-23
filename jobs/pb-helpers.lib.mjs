@@ -7,6 +7,19 @@
 // every read that is not essential to a job degrades to null instead of
 // throwing: a rehearsal that crashes on a missing settings row fails a gate.
 
+/**
+ * A person's name as the team's topic may show it: no email address and no
+ * phone number, ever. An email-shaped name (a users row whose `name` is the
+ * login address, as the on-duty agent's is on 2026-09-23) keeps its local
+ * part; a digit run that reads as a phone (a WhatsApp lead saved with its
+ * number as the name) is dropped. Empty in, empty out.
+ */
+export const safeName = (name) => String(name ?? '')
+  .replace(/@\S*/g, '')
+  .replace(/\+?\d[\d\s().-]{5,}\d/g, '')
+  .replace(/\s+/g, ' ')
+  .trim();
+
 /** A PocketBase record id. Anything else never reaches a filter or a URL. */
 export const RECORD_ID = /^[a-z0-9]+$/;
 const SETTINGS_KEY = /^[a-z0-9._]+$/;
@@ -22,7 +35,7 @@ export async function onDutyName(pb, log, tag) {
     const id = rows[0]?.value?.text;
     if (!id || !RECORD_ID.test(String(id))) return null;
     const user = await pb.collection('users').getOne(id);
-    return user?.name || null;
+    return safeName(user?.name) || null;
   } catch (e) {
     log(`${tag}: on-duty agent unavailable: ${e?.message ?? e}`);
     return null;

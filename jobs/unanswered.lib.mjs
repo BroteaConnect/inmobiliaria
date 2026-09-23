@@ -9,6 +9,7 @@
 // many messages the lead sends while waiting.
 import { MAX_LINES, PIE_CRM, esFecha, horaMadrid, parseFecha, recorta } from './lib.mjs';
 import { madridParts } from './madrid.lib.mjs';
+import { safeName } from './pb-helpers.lib.mjs';
 
 const MS_MIN = 60_000;
 const MS_DAY = 86_400_000;
@@ -102,8 +103,8 @@ export function textUnanswered(alerts, leadsById, onDuty) {
   if (!alerts.length) return null;
   const lines = alerts.slice(0, MAX_LINES).map((s) => {
     const lead = leadsById.get(s.lead_id);
-    const nombre = recorta(lead?.nombre || 'lead sin nombre');
-    const asignado = lead?.expand?.asignado?.name;
+    const nombre = recorta(safeName(lead?.nombre) || 'lead sin nombre');
+    const asignado = safeName(lead?.expand?.asignado?.name);
     const agente = asignado ? recorta(asignado) : onDuty ? `${recorta(onDuty)} (guardia)` : 'sin asignar';
     const canal = CANAL[s.tipo] ?? recorta(s.tipo || 'canal desconocido');
     return `• <b>${nombre}</b> · ${canal} · ${waitText(s.waited_min)} (desde las ${horaMadrid(s.created)}) · ${agente}`;

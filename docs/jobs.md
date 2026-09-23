@@ -30,6 +30,7 @@ aislamiento de fallos, reintentos) es del chasis y no se copia.
 | `jobs/matcher.mjs` | 09:30 | Shortlist de leads que encajan con cada propiedad publicada o tocada en las últimas 24 h (ver [matcher](#matcher)). |
 | `jobs/unanswered.mjs` | hourly | A lead whose WhatsApp/email has waited more than **2 h** with no outbound row, once per unanswered streak, 09:00–21:00 only (see [unanswered](#unanswered)). |
 | `jobs/weekly-summary.mjs` | Fri 18:00 | The business summary of the week, never silent (see [weekly-summary](#weekly-summary)). |
+| `jobs/reactivation.mjs` | Mon 10:00 | A **proposal**: dormant leads that fit the published stock, for an agent to call. Nothing is sent to the leads (see [reactivation](#reactivation)). |
 
 **El silencio es una feature**: si no hay leads desatendidos o el día está
 vacío, no se envía nada. Un canal que solo habla cuando hay algo que decir
@@ -171,6 +172,9 @@ never alerted.
 - One `lead.unanswered_alert` `{lead_id, activity_id, waited_min}` event per
   alerted lead, then the marker, then one Telegram message (lead, channel,
   wait, assigned agent → on-duty agent → "sin asignar").
+- Names in every E6 message go through `safeName()` (`pb-helpers.lib.mjs`):
+  an email address or a phone-shaped digit run never reaches the topic — the
+  on-duty agent's `users.name` is their login address today.
 - Marker: settings row `jobs.unanswered` = `{v: 1, alerted: {<activity id>:
   <ISO>}}`, pruned to 7 days — the anchors already alerted. Under
   `--dry-run` it is not written (the job logs `dry-run: would write
@@ -200,6 +204,28 @@ week. `semana` is the ISO week of the closing Friday (`2026-W39`).
   `project.weekly_summary` `{semana, desde, hasta, …counts}` event, then the
   message. A quiet week is said (`Semana sin movimiento…`), never skipped.
   It writes nothing to PocketBase.
+
+## reactivation
+
+`jobs/reactivation.mjs` (Mondays 10:00; rules in `jobs/reactivation.lib.mjs`)
+proposes, to the team only, which dormant leads fit the stock published
+today. It never sends to a lead, never calls the chassis, never writes to
+PocketBase and never emits `reactivation.sent` — decision 3 of the estate
+build-out: no message to real leads before CU-15 has run and the owner said
+yes.
+
+- Dormant: `etapa` not in `oferta`/`reservado`/`vendido`, and no contact
+  (`ultimo_contacto || created`) for more than 30 days — an unknown date is
+  dormant. A revoked consent (`consentimiento` false with a
+  `consentimiento_en`) is out; a never-given one stays, marked 🚫 (a call
+  needs no marketing consent).
+- Fit: the matcher's `candidatos()` over the **published** properties (zone
+  vocabulary from all of them). Per lead: the best property, how many more
+  fit (`(+k)`) and the reasons. Best score first, then longest silence;
+  10 lines + "… y N más". Lead first name only.
+- Log line, always: `reactivation: <n> dormant lead(s) fit published stock`.
+  With n > 0: `reactivation.proposed` `{leads, properties, with_consent}`,
+  then the message. With n = 0: nothing else.
 
 ## campanas
 

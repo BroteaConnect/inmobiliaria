@@ -6,7 +6,7 @@ import {
   dueAlerts, insideAlertHours, markAlerted, pruneMarker, textUnanswered, unansweredStreaks, waitText,
 } from './unanswered.lib.mjs';
 import { addDays, madridParts, madridWallTime, monthNameEs, previousMonth } from './madrid.lib.mjs';
-import { onDutyName, readMarker, writeMarker } from './pb-helpers.lib.mjs';
+import { onDutyName, readMarker, safeName, writeMarker } from './pb-helpers.lib.mjs';
 import { MAX_LINES, PIE_CRM, firstName } from './lib.mjs';
 
 // 2026-09-23 12:00 Madrid (CEST, UTC+2) = 10:00Z.
@@ -187,6 +187,20 @@ const fakePb = ({ rows = [], fail = false } = {}) => {
 };
 
 describe('pb-helpers', () => {
+  it('safeName drops email addresses and phone numbers', () => {
+    assert.equal(safeName('agente.uno@example.com'), 'agente.uno');
+    assert.equal(safeName('+34 600 123 456'), '');
+    assert.equal(safeName('Ana (600123456)'), 'Ana ()');
+    assert.equal(safeName('María José'), 'María José');
+    assert.equal(safeName('Piso 3'), 'Piso 3');
+    assert.equal(safeName(undefined), '');
+  });
+  it('the alert never shows an address or a phone', () => {
+    const leads = new Map([['l1', { id: 'l1', nombre: '+971 50 123 4567', expand: { asignado: { name: 'luis@example.com' } } }]]);
+    const t = textUnanswered([{ lead_id: 'l1', activity_id: 'a1', tipo: 'email', created: minAgo(130), waited_min: 130 }], leads, null);
+    assert.doesNotMatch(t, /@|\d{3} \d{4}/);
+    assert.match(t, /<b>lead sin nombre<\/b>.*· luis$/m);
+  });
   it('writeMarker writes nothing and reads nothing under dry-run', async () => {
     const pb = fakePb();
     const logs = [];
