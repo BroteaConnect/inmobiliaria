@@ -26,6 +26,7 @@ aislamiento de fallos, reintentos) es del chasis y no se copia.
 |---|---|---|
 | `jobs/agenda.mjs` | 09:00 | Leads con más de **48 h** sin contacto, el más abandonado primero. `⚠️` a partir de 5 días. Máximo 10 líneas + "… y N más". |
 | `jobs/resumen.mjs` | 20:00 | Resumen del día: leads nuevos, importados a la cartera, contactos salientes por canal, mensajes entrantes, emails entregados y propiedades publicadas. |
+| `jobs/matcher.mjs` | 09:30 | Shortlist de leads que encajan con cada propiedad publicada o tocada en las últimas 24 h (ver [matcher](#matcher)). |
 
 **El silencio es una feature**: si no hay leads desatendidos o el día está
 vacío, no se envía nada. Un canal que solo habla cuando hay algo que decir
@@ -61,6 +62,76 @@ no se silencia.
   `Intl.DateTimeFormat` — nunca sumando offsets fijos (el DST desplazaría
   la agenda una hora dos veces al año).
 
+## matcher
+
+`jobs/matcher.mjs` runs at 09:30 Madrid and answers, for every published
+property, "which open leads fit this?". The CRM stores no structured wish —
+`leads.criterios` is free text (the CSV importer writes
+`Compró en <master project> · <edificio> · unidad N · ~<precio> · …`, the web
+form writes whatever the visitor typed) and `mensaje` is prose — so the wish is
+**derived** per lead at run time and never written back:
+
+- **zona**: every town of the vocabulary (the distinct, normalised `municipio`
+  of *all* properties, published or not) found as a whole token in
+  `criterios + mensaje`, plus the town of the property the lead asked about
+  (`leads.propiedad`). Normalisation is lowercase, accents stripped, spaces
+  collapsed: `Chamberí` and `chamberi` are one town; `madrid` is not found in
+  `madridejos`, nor `lakes towers` in `jumeirah lakes towers`.
+- **precio_max**: the first amount in the text (`~1200000`, `550k`, `1.2m`,
+  `1,200,000`, `hasta 300.000`, `presupuesto 550k`). A bare number is not an
+  amount (`unidad 1413` is a flat, `29/12/2022` a date, `120 m2` a surface).
+  `null` when there is none.
+- **habitaciones**: `4 habitaciones` / `3 hab` / `2 bedrooms` / `3br`; `null`
+  when absent.
+
+Scoring (`candidatos()` in `jobs/lib.mjs`): the town is the only hard rule —
+a lead who never named the town, nor asked about a listing there, is not a
+candidate no matter the budget. Town written in the text +3, town known only
+from the linked listing +2, budget unknown or `precio <= precio_max × 1.15`
++1, rooms unknown or `habitaciones >= wanted` +1. Only `vendido` leads are
+excluded (`nutriendo` stays: a parked lead is exactly who a new listing might
+wake up). Best score first.
+
+What it says: the log gets one line per published property, always —
+`matcher: <n> candidate(s) for <propiedad id>` — which is what the E4 gate
+reads. Telegram only hears about a property `updated` in the last 30 h (the
+daily cadence plus the runner's 6 h grace) with at least one candidate: one message per property, `• <b>lead</b> · agent ·
+reasons`, the agent being the lead's `asignado`, else the on-duty agent
+(settings row `agentes.guardia` = `{ v: 1, text: <users id> }`, resolved to
+its name), else "sin asignar"; capped at 10 lines + "… y N más", every name
+cut to 80 chars and HTML-escaped, and the same CRM footer as the agenda. The
+platform event `matcher.shortlist` `{ propiedad_id, candidates, lead_ids
+(top 10) }` is written **before** `notify()`. One broken row is logged and
+skipped so the other properties still get their line, but the run then fails
+with `<k> of <n> properties failed: <ids>` — a broken send or insert reaches
+Alertas instead of hiding behind a green run. On success it returns
+`<n> properties scored, <m> shortlist(s)`.
+
+Honest limits of "touched in the last 30 h": the jobs are stateless and see
+no event history, so a run delayed into the grace window may repeat
+yesterday's shortlist once, and any edit of a published property (a photo, a
+price) re-sends its shortlist the next morning — that is the "touched"
+semantics the team asked for, not a bug. De-duplicating against the
+`matcher.shortlist` events would need the runner to expose them to `ctx`.
+
+Where the live data stands (2026-09-23): the 216 historical leads carry no
+price and no recognisable town — the importer's `criterios` names the Dubai
+building the buyer bought in (`Seven City JLT`, `MBL Royal`…), not a
+`municipio`, so no vocabulary town appears in any lead's text. The only
+candidate today is the demo web lead, matched through the Madrid property it
+asked about. The matcher will stay nearly silent until the importer maps a
+building to its municipio (every JLT building → `Jumeirah Lakes Towers`) or
+the vocabulary grows with the towns the leads actually write. Data fix for the
+CRM: one unpublished property carries the literal `municipio` value
+`Master Project` (a column header that leaked through the import); it sits in
+the vocabulary as a junk town until the row is corrected.
+
+Out of scope until E5: the WhatsApp half of the flow — asking the lead
+"¿te encaja?" and turning a "sí" into `propiedad.encaja` on the lead. A
+business-initiated WhatsApp message needs a Twilio Content template (or the
+lead's own 24-hour window, which a lead who wrote weeks ago no longer has);
+that template is E5's deliverable, and the matcher will call it from there.
+
 ## Probar y dry-run
 
 - Tests unitarios: `npm test` (ejecuta `node --test jobs/*.test.mjs
@@ -75,7 +146,8 @@ no se silencia.
 - Los jobs son stateless y re-ejecutables: no escriben en PocketBase. Cada
   envío inserta su evento de plataforma — `lead.reminder_sent`
   (`{count, oldest}`) la agenda, `project.daily_digest` (los contadores) el
-  resumen — **antes** de `notify()`: si un reintento repite el job, duplica
+  resumen, `matcher.shortlist` (`{propiedad_id, candidates, lead_ids}`) el
+  matcher — **antes** de `notify()`: si un reintento repite el job, duplica
   una fila inofensiva, no un mensaje de Telegram.
 
 Para añadir o modificar un job, usa la skill `jobs`

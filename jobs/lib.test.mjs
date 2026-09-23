@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
   desatendidos, textoAgenda, resumenDelDia, textoResumen, haceCuanto,
   diaMadrid, visitasDeHoy, textoVisitas, MAX_LINES, MAX_NOMBRE, ORIGEN_IMPORTADO,
+  normalizarTexto, vocabularioMunicipios, extraerPrecioMax, extraerHabitaciones,
+  normalizarCriterios, normalizarLeads, candidatos, esReciente, textoShortlist, PIE_CRM,
 } from './lib.mjs';
 
 // Fixed "now": 2026-07-30 09:00 Europe/Madrid (CEST, UTC+2) = 07:00Z.
@@ -350,5 +352,247 @@ describe('textoVisitas', () => {
     const txt = textoVisitas(vs, NOW);
     assert.equal((txt.match(/^• /gm) || []).length, MAX_LINES);
     assert.match(txt, /… y 3 más/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Matcher
+
+// Every property the agency has ever listed, published or not: the vocabulary
+// comes from all of them.
+const PROPIEDADES = [
+  { id: 'p1', titulo: 'Piso en Chamberí', municipio: 'Chamberí', precio: 620000, habitaciones: 3, estado: 'publicada' },
+  { id: 'p2', titulo: 'Chalet en Las Rozas', municipio: 'Las Rozas', precio: 545000, habitaciones: 4, estado: 'publicada' },
+  { id: 'p3', titulo: 'Apartamento en JLT', municipio: 'Jumeirah Lakes Towers', precio: 0, habitaciones: 0, estado: 'borrador' },
+  { id: 'p4', titulo: 'Loft', municipio: 'Madrid', precio: 289000, habitaciones: 2, estado: 'publicada' },
+];
+const MUNICIPIOS = vocabularioMunicipios(PROPIEDADES);
+const norm = (over) => normalizarCriterios(lead(over), MUNICIPIOS);
+
+describe('normalizarTexto', () => {
+  it('lowercases, strips accents and collapses spaces', () => {
+    assert.equal(normalizarTexto('  Chamberí   JUMEIRAH\tLakes '), 'chamberi jumeirah lakes');
+    assert.equal(normalizarTexto(null), '');
+  });
+
+  it('builds the town vocabulary from every property, published or not', () => {
+    assert.deepEqual(MUNICIPIOS, ['chamberi', 'las rozas', 'jumeirah lakes towers', 'madrid']);
+    assert.deepEqual(vocabularioMunicipios([{ municipio: '' }, { municipio: 'Getafe' }, { municipio: 'getafe ' }]), ['getafe']);
+  });
+});
+
+describe('normalizarCriterios', () => {
+  it('reads the historical import shape: master project as zona, ~precio, no rooms', () => {
+    const n = norm({
+      criterios: 'Compró en Jumeirah Lakes Towers · Seven City · unidad 1413 · ~1200000 · Procedimiento: compra · Fecha: 29/12/2022 · País: España',
+    });
+    assert.deepEqual(n.zona, ['jumeirah lakes towers']);
+    assert.deepEqual(n.zona_texto, ['jumeirah lakes towers']);
+    assert.equal(n.precio_max, 1200000);
+    assert.equal(n.habitaciones, null);
+  });
+
+  it('reads a web lead: budget and rooms from the message, zona from the linked property', () => {
+    const n = norm({
+      mensaje: 'Buscamos chalet con jardín, presupuesto 550k, 4 habitaciones',
+      expand: { propiedad: PROPIEDADES[1] },
+    });
+    assert.deepEqual(n.zona, ['las rozas']);
+    assert.deepEqual(n.zona_texto, []); // the town came from the hint, not the text
+    assert.equal(n.precio_max, 550000);
+    assert.equal(n.habitaciones, 4);
+  });
+
+  it('ignores accents and case: "chamberi" finds Chamberí, and the hint is not repeated', () => {
+    assert.deepEqual(norm({ mensaje: 'Busco piso en CHAMBERI' }).zona, ['chamberi']);
+    assert.deepEqual(norm({ criterios: 'Zona: chamberí' }).zona, ['chamberi']);
+    const n = norm({ mensaje: 'algo en Chamberí', expand: { propiedad: PROPIEDADES[0] } });
+    assert.deepEqual(n.zona, ['chamberi']);
+    assert.deepEqual(n.zona_texto, ['chamberi']);
+  });
+
+  it('matches multi-word towns whole, never a fragment or a longer word', () => {
+    assert.deepEqual(norm({ mensaje: 'un estudio en jumeirah lakes towers' }).zona, ['jumeirah lakes towers']);
+    assert.deepEqual(norm({ mensaje: 'un estudio en lakes towers' }).zona, []);
+    assert.deepEqual(norm({ mensaje: 'algo en Madridejos' }).zona, []);
+    assert.deepEqual(norm({ mensaje: 'Madrid, o Las Rozas.' }).zona, ['las rozas', 'madrid']);
+  });
+
+  it('prefers the longest town: "las rozas de madrid" is Las Rozas, not Madrid too', () => {
+    assert.deepEqual(norm({ mensaje: 'chalet en Las Rozas de Madrid' }).zona, ['las rozas']);
+    assert.deepEqual(norm({ mensaje: 'Las Rozas de Madrid, o en Madrid centro' }).zona, ['las rozas', 'madrid']);
+  });
+
+  it('yields null zona/price/rooms for an empty lead', () => {
+    assert.deepEqual(norm({ criterios: '', mensaje: '' }), { zona: [], zona_texto: [], precio_max: null, habitaciones: null });
+  });
+});
+
+describe('extraerPrecioMax / extraerHabitaciones', () => {
+  it('reads every amount format the forms produce', () => {
+    assert.equal(extraerPrecioMax('~1200000'), 1200000);
+    assert.equal(extraerPrecioMax('550k'), 550000);
+    assert.equal(extraerPrecioMax('unos 1.2m'), 1200000);
+    assert.equal(extraerPrecioMax('1,200,000'), 1200000);
+    assert.equal(extraerPrecioMax('hasta 300.000'), 300000);
+    assert.equal(extraerPrecioMax('presupuesto 550k'), 550000);
+    assert.equal(extraerPrecioMax('€ 450.000 como maximo'), 450000);
+    assert.equal(extraerPrecioMax('1,5 millones'), 1500000);
+    assert.equal(extraerPrecioMax('maximo 300000'), 300000);
+  });
+
+  it('takes the FIRST amount', () => {
+    assert.equal(extraerPrecioMax('entre 300k y 400k'), 300000);
+  });
+
+  it('does not mistake a flat number, a date, a surface or a room count for money', () => {
+    assert.equal(extraerPrecioMax('unidad 1413 · Fecha: 29/12/2022'), null);
+    assert.equal(extraerPrecioMax('hasta 4 habitaciones y 120 m2'), null);
+    assert.equal(extraerPrecioMax('120m² con terraza'), null);
+    assert.equal(extraerPrecioMax(''), null);
+  });
+
+  it('rejects what is not a purchase budget: years, phones, lengths, rents, out-of-band amounts', () => {
+    assert.equal(extraerPrecioMax('hasta 2024'), null);
+    assert.equal(extraerPrecioMax('tel 600.123.456'), null);
+    assert.equal(extraerPrecioMax('120 m'), null);
+    assert.equal(extraerPrecioMax('3 m de fachada'), null);
+    assert.equal(extraerPrecioMax('12.000 €/mes'), null);
+    assert.equal(extraerPrecioMax('12.000 € al mes'), null);
+    assert.equal(extraerPrecioMax('hasta 9.999'), null);
+    assert.equal(extraerPrecioMax('~150000000'), null);
+    // …and the next plausible amount still wins
+    assert.equal(extraerPrecioMax('12.000 €/mes o hasta 300.000 de compra'), 300000);
+  });
+
+  it('returns fast on a pathological digit run (no quadratic backtracking)', () => {
+    const t0 = performance.now();
+    assert.equal(extraerPrecioMax('9'.repeat(50_000)), null);
+    assert.equal(extraerPrecioMax(`hasta ${'1'.repeat(50_000)}`), null);
+    assert.ok(performance.now() - t0 < 100, `took ${Math.round(performance.now() - t0)} ms`);
+  });
+
+  it('reads rooms in Spanish and English, null when absent', () => {
+    assert.equal(extraerHabitaciones('4 habitaciones'), 4);
+    assert.equal(extraerHabitaciones('3hab'), 3);
+    assert.equal(extraerHabitaciones('2 dormitorios'), 2);
+    assert.equal(extraerHabitaciones('2 bedrooms'), 2);
+    assert.equal(extraerHabitaciones('3br'), 3);
+    assert.equal(extraerHabitaciones('sin datos'), null);
+  });
+});
+
+describe('candidatos', () => {
+  const chamberi = PROPIEDADES[0]; // 620000 · 3 hab
+  const cands = (leads, prop = chamberi) => candidatos(prop, normalizarLeads(leads, MUNICIPIOS));
+
+  it('requires the town: price and rooms alone never make a candidate', () => {
+    const rico = lead({ mensaje: 'presupuesto 900k, 2 habitaciones' });
+    assert.deepEqual(cands([rico]), []);
+  });
+
+  it('scores a town written in the text over a town inferred from the linked listing', () => {
+    const escrito = lead({ mensaje: 'piso en Chamberí' });
+    const pista = lead({ mensaje: 'me interesa', expand: { propiedad: chamberi } });
+    const out = cands([pista, escrito]);
+    assert.deepEqual(out.map((c) => [c.lead.id, c.score]), [[escrito.id, 5], [pista.id, 4]]);
+    assert.match(out[1].motivos[0], /por la propiedad que consultó/);
+  });
+
+  it('price and rooms only reorder: a mismatch still lists, a match ranks higher', () => {
+    const pobre = lead({ mensaje: 'Chamberí, hasta 300.000, 5 habitaciones' }); // both fail → 3
+    const justo = lead({ mensaje: 'Chamberí, presupuesto 550k' }); // 620000 <= 632500 → 4+1
+    const sinDatos = lead({ mensaje: 'Chamberí' }); // unknowns count → 5
+    const out = cands([pobre, justo, sinDatos]);
+    assert.deepEqual(out.map((c) => c.lead.id), [justo.id, sinDatos.id, pobre.id]);
+    assert.deepEqual(out.map((c) => c.score), [5, 5, 3]);
+    assert.deepEqual(out[2].motivos, ['zona chamberi']);
+  });
+
+  it('applies the 15 % price margin and the rooms floor exactly', () => {
+    const limite = lead({ mensaje: 'Chamberí, hasta 539.130' }); // 620000 / 1.15 = 539130.4 → fails
+    const dentro = lead({ mensaje: 'Chamberí, hasta 539.131' });
+    const [a, b] = cands([limite, dentro]).sort((x, y) => x.lead.id.localeCompare(y.lead.id));
+    assert.equal(a.score, 4);
+    assert.equal(b.score, 5);
+    assert.equal(cands([lead({ mensaje: 'Chamberí, 3 hab' })])[0].score, 5);
+    assert.equal(cands([lead({ mensaje: 'Chamberí, 4 hab' })])[0].score, 4);
+  });
+
+  it('excludes vendido only: nutriendo is a candidate', () => {
+    const vendido = lead({ etapa: 'vendido', mensaje: 'Chamberí' });
+    const parked = lead({ etapa: 'nutriendo', mensaje: 'Chamberí' });
+    assert.deepEqual(cands([vendido, parked]).map((c) => c.lead.id), [parked.id]);
+  });
+
+  it('cuts an unbounded municipio in the reasons', () => {
+    const largo = { ...chamberi, municipio: 'x'.repeat(500) };
+    const out = candidatos(largo, normalizarLeads([lead({ mensaje: 'algo', expand: { propiedad: largo } })], MUNICIPIOS));
+    assert.equal(out[0].motivos[0], `zona ${'x'.repeat(MAX_NOMBRE)} (por la propiedad que consultó)`);
+  });
+
+  it('a property without a town has no candidates', () => {
+    assert.deepEqual(cands([lead({ mensaje: 'Chamberí' })], { municipio: '' }), []);
+  });
+
+  it('a 0 price (unset in PocketBase) fits every budget', () => {
+    const out = cands([lead({ mensaje: 'jumeirah lakes towers, 100k' })], PROPIEDADES[2]);
+    assert.equal(out[0].score, 5);
+  });
+});
+
+describe('esReciente', () => {
+  it('is true inside the last 24 h, false beyond, false for an unusable date', () => {
+    assert.equal(esReciente(hoursAgo(23), NOW), true);
+    assert.equal(esReciente(pbDate(hoursAgo(25)), NOW), false);
+    assert.equal(esReciente('', NOW), false);
+  });
+});
+
+describe('textoShortlist', () => {
+  const prop = PROPIEDADES[0];
+  const shortlist = (leads, guardia = null) =>
+    textoShortlist(prop, candidatos(prop, normalizarLeads(leads, MUNICIPIOS)), guardia, NOW);
+
+  it('returns null without candidates', () => {
+    assert.equal(textoShortlist(prop, [], 'Luis', NOW), null);
+  });
+
+  it('names the property and prints lead, agent and reasons per line, with the CRM footer', () => {
+    const l = lead({ nombre: 'Ana', mensaje: 'Chamberí', expand: { asignado: { name: 'Luis' } } });
+    const txt = shortlist([l]);
+    assert.match(txt, /<b>Encaje<\/b> — .* · Piso en Chamberí \(Chamberí\) · 1 candidato:/);
+    assert.match(txt, /^• <b>Ana<\/b> · Luis · zona chamberi, presupuesto sin indicar, habitaciones sin indicar$/m);
+    assert.ok(txt.endsWith(PIE_CRM));
+  });
+
+  it('falls back to the on-duty agent, then to "sin asignar"', () => {
+    const l = lead({ nombre: 'Ana', mensaje: 'Chamberí' });
+    assert.match(shortlist([l], 'Marta'), /<b>Ana<\/b> · Marta \(guardia\) · /);
+    assert.match(shortlist([l]), /<b>Ana<\/b> · sin asignar · /);
+  });
+
+  it('escapes and truncates names (HTML mode)', () => {
+    const l = lead({ nombre: 'P&J <SL>', mensaje: 'Chamberí', expand: { asignado: { name: '&'.repeat(500) } } });
+    const txt = shortlist([l]);
+    assert.match(txt, new RegExp(`<b>P&amp;J &lt;SL&gt;</b> · ${'&amp;'.repeat(MAX_NOMBRE)} · `));
+    const largo = { ...prop, titulo: '<'.repeat(500) };
+    assert.match(textoShortlist(largo, candidatos(largo, normalizarLeads([l], MUNICIPIOS)), null, NOW), new RegExp(`· ${'&lt;'.repeat(MAX_NOMBRE)} \\(`));
+  });
+
+  it('caps at MAX_LINES with "… y N más" and stays under 4096 chars with 200 candidates', () => {
+    const many = Array.from({ length: 200 }, () =>
+      lead({ nombre: 'x'.repeat(200), mensaje: 'Chamberí, 550k, 3 hab', expand: { asignado: { name: 'y'.repeat(200) } } }));
+    const txt = shortlist(many);
+    assert.equal((txt.match(/^• /gm) || []).length, MAX_LINES);
+    assert.match(txt, new RegExp(`… y ${200 - MAX_LINES} más`));
+    assert.ok(txt.length < 4096, `length ${txt.length}`);
+  });
+
+  it('lists the best-scored candidate first', () => {
+    const flojo = lead({ nombre: 'Flojo', mensaje: 'Chamberí, hasta 100.000, 6 hab' });
+    const fuerte = lead({ nombre: 'Fuerte', mensaje: 'Chamberí, 700k' });
+    const txt = shortlist([flojo, fuerte]);
+    assert.ok(txt.indexOf('<b>Fuerte</b>') < txt.indexOf('<b>Flojo</b>'));
   });
 });

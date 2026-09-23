@@ -60,6 +60,9 @@ const madridHeader = new Intl.DateTimeFormat('es-ES', {
 const escapeHtml = (s) =>
   String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+// The one call to action every digest ends with (agenda and shortlist alike).
+export const PIE_CRM = 'Abre el CRM y dales salida: https://crm-inmobiliaria.brotea.dev';
+
 // "hace 3 días" / "hace 1 día" / "hace 5 horas" / "hace menos de una hora"
 export function haceCuanto(date, now) {
   const d = parseFecha(date);
@@ -101,7 +104,7 @@ export function textoAgenda(stale, now) {
     '',
     ...lines,
     '',
-    'Abre el CRM y dales salida: https://crm-inmobiliaria.brotea.dev',
+    PIE_CRM,
   ].join('\n');
 }
 
@@ -204,4 +207,189 @@ export function textoResumen(resumen, now) {
   if (resumen.emailsEntregados) lines.push(`• Emails entregados: ${resumen.emailsEntregados}`);
   if (resumen.publicadas) lines.push(`• Propiedades publicadas: ${resumen.publicadas}`);
   return [`🌙 <b>Resumen del día</b> — ${madridHeader.format(now)}:`, '', ...lines].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Matcher (09:30): which leads fit a published property.
+//
+// The CRM has no structured "what the lead wants" — `criterios` is free text
+// (the CSV importer writes "Compró en <master project> · <edificio> · unidad N
+// · ~<precio> · …", the web form writes whatever the visitor typed) and the
+// `mensaje` is prose. So the wish is DERIVED here, per lead, and never stored:
+//   zona          the towns named in the text — matched against the vocabulary
+//                 of real `municipio` values (every property, published or
+//                 not), plus the town of the property the lead asked about
+//   precio_max    the first amount in the text (~1200000, 550k, 1.2m,
+//                 1,200,000, "hasta 300.000") — null when none
+//   habitaciones  "4 habitaciones" / "3 hab" / "2 bedrooms" — null when none
+// The town is the only hard rule: a lead who never named the town, nor asked
+// about a property there, is not a candidate no matter the price. Price and
+// rooms only reorder (and an unknown is not a mismatch).
+
+// Lowercase, accents stripped (NFD, then the combining marks), spaces collapsed:
+// "Chamberí" and "  CHAMBERI " are the same town.
+export const normalizarTexto = (s) =>
+  String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+
+// Distinct normalised `municipio` values of a set of properties — the town
+// vocabulary. Built from ALL properties: an unpublished listing still tells us
+// that "las rozas" is a town this agency works.
+export const vocabularioMunicipios = (propiedades) =>
+  [...new Set(propiedades.map((p) => normalizarTexto(p.municipio)).filter(Boolean))];
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// A town counts only as a whole token: "madrid" is not in "madridejos", and
+// "lakes towers" is not "jumeirah lakes towers". A "de <word>" tail belongs
+// to the town's name ("las rozas de madrid", "getafe de la sierra") and is
+// part of the match, so blanking the span also blanks the qualifier.
+const reEntero = (termino) =>
+  new RegExp(`(?<=^|[^\\p{L}\\p{N}])${escapeRe(termino)}(?:\\s+de\\s+(?:l[aoe]s?\\s+)?\\p{L}+)?(?=$|[^\\p{L}\\p{N}])`, 'gu');
+// The towns named in `texto`, longest first, each match blanked before the
+// shorter towns are tried: "las rozas de madrid" is Las Rozas, not Madrid too.
+const zonasEnTexto = (texto, municipios) => {
+  const found = [];
+  let resto = texto;
+  for (const m of [...municipios].filter(Boolean).sort((a, b) => b.length - a.length)) {
+    const re = reEntero(m);
+    if (!re.test(resto)) continue;
+    found.push(m);
+    resto = resto.replace(re, (x) => ' '.repeat(x.length));
+  }
+  return found;
+};
+
+// An amount is a number with a money marker: a prefix (~ € $ or a budget
+// word), a suffix (k, m, mil, millones, €), or thousands separators. A bare
+// number is NOT an amount — "unidad 1413" is a flat, "29/12/2022" a date,
+// "120 m2" a surface (the m may not be followed by a digit or ²) — and a
+// budget word before a small bare number ("hasta 4 habitaciones") is not one
+// either: without suffix or separators the number needs 4+ digits. Then a
+// plausibility band: a home costs between 10 000 and 100 000 000, so
+// "hasta 2024" (a year) and "tel 600.123.456" (a phone, also excluded by
+// shape) are not budgets; "3 m de fachada" is a length ("m de" is never
+// money) and "12.000 €/mes" is a rent, not a purchase budget.
+// Digit runs are bounded and the text is cut at IMPORTE_MAX_CHARS: an
+// unbounded `\d+(?:[.,]\d+)?` backtracks quadratically on a long digit run
+// (a 20 000-digit message took seconds), and a real wish fits in 4000 chars.
+const RE_IMPORTE = /(?:(hasta|presupuesto|max|maximo|budget|precio|tope|~|€|\$)\s*(?:de\s+|of\s+)?:?\s*)?(\d{1,3}(?:[.,]\d{3}){1,5}|\d{1,15}(?:[.,]\d{1,15})?)\s*(k|m(?!\s*de\b)|mil|millones|millon|€|eur|euros)?(?![\p{L}\p{N}²])(\s*(?:€|eur(?:os)?)?\s*(?:\/|al |por )\s*mes)?/gu;
+const RE_TELEFONO = /^\d{3}[.]\d{3}[.]\d{3}$/;
+const FACTOR = { k: 1e3, mil: 1e3, m: 1e6, millon: 1e6, millones: 1e6 };
+export const IMPORTE_MIN = 10_000;
+export const IMPORTE_MAX = 100_000_000;
+const IMPORTE_MAX_CHARS = 4000;
+export function extraerPrecioMax(texto) {
+  for (const m of String(texto).slice(0, IMPORTE_MAX_CHARS).matchAll(RE_IMPORTE)) {
+    const [, prefijo, numero, sufijo, mensual] = m;
+    if (mensual || RE_TELEFONO.test(numero)) continue;
+    const separado = /^\d{1,3}(?:[.,]\d{3})+$/.test(numero);
+    const soloDigitos = numero.replace(/\D/g, '');
+    if (!prefijo && !sufijo && !separado) continue;
+    if (prefijo && !sufijo && !separado && soloDigitos.length < 4) continue;
+    const base = separado ? Number(soloDigitos) : Number(numero.replace(',', '.'));
+    const valor = Math.round(base * (FACTOR[sufijo] || 1));
+    if (Number.isFinite(valor) && valor >= IMPORTE_MIN && valor <= IMPORTE_MAX) return valor;
+  }
+  return null;
+}
+
+const RE_HABITACIONES = /(\d+)\s*(hab|habitaci|dormitor|bed|br\b)/;
+export function extraerHabitaciones(texto) {
+  const m = RE_HABITACIONES.exec(texto);
+  return m ? Number(m[1]) : null;
+}
+
+// The derived wish of one lead. `zona` is every vocabulary town found in the
+// text plus the town of the linked property (`expand.propiedad`); `zona_texto`
+// is the subset that came from the text — the scorer pays a town the lead
+// wrote more than a town we only infer from the listing they clicked.
+export function normalizarCriterios(lead, municipios) {
+  const texto = normalizarTexto(`${lead.criterios ?? ''} ${lead.mensaje ?? ''}`);
+  const zona_texto = zonasEnTexto(texto, municipios);
+  const pista = normalizarTexto(lead.expand?.propiedad?.municipio);
+  const zona = pista && !zona_texto.includes(pista) ? [...zona_texto, pista] : [...zona_texto];
+  return { zona, zona_texto, precio_max: extraerPrecioMax(texto), habitaciones: extraerHabitaciones(texto) };
+}
+
+export const normalizarLeads = (leads, municipios) =>
+  leads.map((lead) => ({ lead, norm: normalizarCriterios(lead, municipios) }));
+
+// Business rule: how much each signal weighs.
+export const PESO_ZONA_TEXTO = 3; // the lead named the town
+export const PESO_ZONA_PISTA = 2; // we only know the town from the listing they asked about
+export const PESO_PRECIO = 1; // unknown budget, or the price within 15 % of it
+export const PESO_HABITACIONES = 1; // unknown, or the property has at least that many
+export const MARGEN_PRECIO = 1.15;
+
+// Candidates for one property, best first: [{ lead, score, motivos }].
+// The town match is required; `vendido` leads are out (a buyer who already
+// bought is not shopping) — every other stage, `nutriendo` included, stays:
+// a parked lead is exactly who a new listing might wake up.
+export function candidatos(propiedad, leadsNorm) {
+  const municipio = normalizarTexto(propiedad.municipio);
+  if (!municipio) return [];
+  // municipio has no max in the schema: cut it once here, escape in the message.
+  const etiqueta = municipio.slice(0, MAX_NOMBRE);
+  const out = [];
+  for (const { lead, norm } of leadsNorm) {
+    if (lead.etapa === 'vendido') continue;
+    if (!norm.zona.includes(municipio)) continue;
+    const motivos = [];
+    let score = 0;
+    if (norm.zona_texto.includes(municipio)) {
+      score += PESO_ZONA_TEXTO;
+      motivos.push(`zona ${etiqueta}`);
+    } else {
+      score += PESO_ZONA_PISTA;
+      motivos.push(`zona ${etiqueta} (por la propiedad que consultó)`);
+    }
+    if (norm.precio_max == null) {
+      score += PESO_PRECIO;
+      motivos.push('presupuesto sin indicar');
+    } else if (Number(propiedad.precio) <= norm.precio_max * MARGEN_PRECIO) {
+      score += PESO_PRECIO;
+      motivos.push('encaja en presupuesto');
+    }
+    if (norm.habitaciones == null) {
+      score += PESO_HABITACIONES;
+      motivos.push('habitaciones sin indicar');
+    } else if (Number(propiedad.habitaciones) >= norm.habitaciones) {
+      score += PESO_HABITACIONES;
+      motivos.push(`≥ ${norm.habitaciones} hab`);
+    }
+    out.push({ lead, score, motivos });
+  }
+  // Array.prototype.sort is stable: equal scores keep the input order.
+  return out.sort((a, b) => b.score - a.score);
+}
+
+// True when `date` is within the last `horas` hours of `now`. An unparseable
+// date is not recent (the pre-autodate rows have updated = "").
+export function esReciente(date, now, horas = 24) {
+  const d = parseFecha(date);
+  return esFecha(d) && now - d >= 0 && now - d <= horas * MS_HOUR;
+}
+
+// The shortlist message for one property (HTML). One line per candidate:
+// `• <b>lead</b> · agent · reasons`, the agent being the lead's `asignado`,
+// else the on-duty agent (`agentes.guardia`), else "sin asignar". Capped at
+// MAX_LINES; every name cut to MAX_NOMBRE and escaped. Null without candidates.
+export function textoShortlist(propiedad, cands, guardiaNombre, now) {
+  if (!cands.length) return null;
+  const lines = cands.slice(0, MAX_LINES).map(({ lead, motivos }) => {
+    const nombre = recorta(lead.nombre || 'lead sin nombre');
+    const asignado = lead.expand?.asignado?.name;
+    const agente = asignado ? recorta(asignado) : guardiaNombre ? `${recorta(guardiaNombre)} (guardia)` : 'sin asignar';
+    return `• <b>${nombre}</b> · ${agente} · ${motivos.map(escapeHtml).join(', ')}`;
+  });
+  if (cands.length > MAX_LINES) lines.push(`… y ${cands.length - MAX_LINES} más`);
+  const n = cands.length;
+  const titulo = recorta(propiedad.titulo || 'propiedad sin título');
+  const municipio = propiedad.municipio ? ` (${recorta(propiedad.municipio)})` : '';
+  return [
+    `🎯 <b>Encaje</b> — ${madridHeader.format(now)} · ${titulo}${municipio} · ${n} ${n === 1 ? 'candidato' : 'candidatos'}:`,
+    '',
+    ...lines,
+    '',
+    PIE_CRM,
+  ].join('\n');
 }
