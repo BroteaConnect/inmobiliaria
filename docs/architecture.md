@@ -172,8 +172,10 @@ Twilio's positional `{{i+1}}`, so reordering it is a content change. The seed,
 `node pb/plantillas.mjs [--dry-run] [--force]`, keys rows by `clave` and speaks
 three verbs: `created` (new row, `estado` borrador, `version` 1), `kept` (already
 there; also under `--force` when the content is unchanged or the instance version
-is newer) and `updated` (`--force` only: content replaced and the Twilio lifecycle
-reset). Rows on the instance that the catalog does not know are reported and never
+is newer, or when the content differs at the same version — bump the seed's
+`CATALOG_VERSION` to ship it) and `updated` (`--force` only, when the catalog version
+is newer: content replaced, `version` stamped and the Twilio lifecycle reset so
+`envios.plantilla_version` never points at two texts). Rows on the instance that the catalog does not know are reported and never
 deleted. `content_sid`/`content_estado`/`content_motivo` describe the Spanish Twilio
 Content and `content_sid_en`/`content_estado_en`/`content_motivo_en` the English one;
 both are created by one chassis `/content/submit`.

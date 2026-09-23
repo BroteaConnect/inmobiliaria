@@ -8,9 +8,11 @@
 //   plantillas: <clave> created   the row did not exist → POST content + lifecycle defaults
 //   plantillas: <clave> kept      the row exists (or, under --force, its content is unchanged
 //                                 or the instance version is newer than the catalog)
-//   plantillas: <clave> updated   --force only: content differs → PATCH content and reset the
-//                                 Twilio lifecycle (estado borrador, content_* cleared) so the
-//                                 template goes back through /content/submit
+//   plantillas: <clave> updated   --force only: content differs AND the catalog version is
+//                                 newer → PATCH content, stamp `version` and reset the Twilio
+//                                 lifecycle (estado borrador, content_* cleared) so the template
+//                                 goes back through /content/submit. Same version, different
+//                                 text is kept: bump CATALOG_VERSION to ship it.
 // Rows on the instance that the catalog does not know are reported and never
 // touched. --dry-run prints the same lines with a " (dry-run)" suffix and
 // writes nothing. Exit codes: 0 ok, 1 instance/credentials error, 2 catalog
@@ -34,7 +36,8 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--dry-run') dryRun = true;
   else if (a === '--force') force = true;
-  else if (a === '--slug' && argv[i + 1]) slug = argv[++i];
+  else if (a === '--slug' && argv[i + 1] && !argv[i + 1].startsWith('--')) slug = argv[++i];
+  else if (a === '--slug') { console.error(`✖ plantillas: --slug needs a value\n${USAGE}`); process.exit(64); }
   else if (a.startsWith('--slug=')) slug = a.slice('--slug='.length);
   else { console.error(`✖ plantillas: unknown flag ${a}\n${USAGE}`); process.exit(64); }
 }
@@ -55,7 +58,7 @@ if (!existsSync(credFile)) {
   process.exit(1);
 }
 const creds = readFileSync(credFile, 'utf8');
-const pick = (k) => creds.match(new RegExp(`^${k}=(.*)$`, 'm'))?.[1];
+const pick = (k) => creds.match(new RegExp(`^${k}=(.*)$`, 'm'))?.[1]?.trim();
 const PB = pick('PB_URL');
 const EMAIL = pick('PB_ADMIN_EMAIL');
 const PASS = pick('PB_ADMIN_PASS');
@@ -64,11 +67,23 @@ if (!PB || !EMAIL || !PASS) {
   process.exit(1);
 }
 
+// Every call to the instance goes through here: a network failure would
+// otherwise surface undici's error, whose cause names the host. We print the
+// error code only, and never let a hung instance hold the seed forever.
+const call = async (url, init = {}) => {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(15_000) });
+  } catch (e) {
+    console.error(`✖ plantillas: instance unreachable (${e.cause?.code ?? e.name})`);
+    process.exit(1);
+  }
+};
+
 // -- auth (superuser login is rate-limited: 2 per 3 s; retry on 429 only) -----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let token = '';
 for (let attempt = 1; attempt <= 4; attempt++) {
-  const r = await fetch(`${PB}/api/collections/_superusers/auth-with-password`, {
+  const r = await call(`${PB}/api/collections/_superusers/auth-with-password`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ identity: EMAIL, password: PASS }),
   });
@@ -85,7 +100,7 @@ const COL = `${PB}/api/collections/plantillas/records`;
 const listAll = async () => {
   const items = [];
   for (let page = 1; ; page++) {
-    const r = await fetch(`${COL}?perPage=200&page=${page}&sort=clave`, { headers: H });
+    const r = await call(`${COL}?perPage=200&page=${page}&sort=clave`, { headers: H });
     if (r.status >= 300) { console.error(`✖ plantillas: list failed (HTTP ${r.status})`); process.exit(1); }
     const data = await r.json();
     items.push(...(data.items ?? []));
@@ -106,7 +121,7 @@ for (const rec of existing) {
 
 // -- writes ---------------------------------------------------------------------------
 const write = async (clave, method, url, body) => {
-  const r = await fetch(url, { method, headers: HJ, body: JSON.stringify(body) });
+  const r = await call(url, { method, headers: HJ, body: JSON.stringify(body) });
   if (r.status >= 300) {
     const text = await r.text();
     console.error(`✖ plantillas: ${clave}: HTTP ${r.status} ${text.slice(0, 200)}`);
@@ -136,10 +151,14 @@ for (const row of rows) {
   const instanceVersion = Number(current.version) || 0;
   if (instanceVersion > CATALOG_VERSION) { counts.kept++; say(`kept (instance v${instanceVersion} newer than catalog)`); continue; }
   if (sameContent(current, row)) { counts.kept++; say('kept'); continue; }
+  // Same version, different text: writing it would make envios.plantilla_version
+  // point at two bodies. The catalog has to say it changed.
+  if (instanceVersion === CATALOG_VERSION) { counts.kept++; say('kept (content differs at the same version — bump CATALOG_VERSION)'); continue; }
 
   if (!dryRun) {
     await write(clave, 'PATCH', `${COL}/${current.id}`, {
       ...contentOf(row),
+      version: CATALOG_VERSION,
       estado: 'borrador',
       content_sid: '', content_motivo: '',
       content_sid_en: '', content_motivo_en: '',
