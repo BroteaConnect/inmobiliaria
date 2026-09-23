@@ -418,6 +418,11 @@ describe('normalizarCriterios', () => {
     assert.deepEqual(norm({ mensaje: 'Madrid, o Las Rozas.' }).zona, ['las rozas', 'madrid']);
   });
 
+  it('prefers the longest town: "las rozas de madrid" is Las Rozas, not Madrid too', () => {
+    assert.deepEqual(norm({ mensaje: 'chalet en Las Rozas de Madrid' }).zona, ['las rozas']);
+    assert.deepEqual(norm({ mensaje: 'Las Rozas de Madrid, o en Madrid centro' }).zona, ['las rozas', 'madrid']);
+  });
+
   it('yields null zona/price/rooms for an empty lead', () => {
     assert.deepEqual(norm({ criterios: '', mensaje: '' }), { zona: [], zona_texto: [], precio_max: null, habitaciones: null });
   });
@@ -445,6 +450,26 @@ describe('extraerPrecioMax / extraerHabitaciones', () => {
     assert.equal(extraerPrecioMax('hasta 4 habitaciones y 120 m2'), null);
     assert.equal(extraerPrecioMax('120m² con terraza'), null);
     assert.equal(extraerPrecioMax(''), null);
+  });
+
+  it('rejects what is not a purchase budget: years, phones, lengths, rents, out-of-band amounts', () => {
+    assert.equal(extraerPrecioMax('hasta 2024'), null);
+    assert.equal(extraerPrecioMax('tel 600.123.456'), null);
+    assert.equal(extraerPrecioMax('120 m'), null);
+    assert.equal(extraerPrecioMax('3 m de fachada'), null);
+    assert.equal(extraerPrecioMax('12.000 €/mes'), null);
+    assert.equal(extraerPrecioMax('12.000 € al mes'), null);
+    assert.equal(extraerPrecioMax('hasta 9.999'), null);
+    assert.equal(extraerPrecioMax('~150000000'), null);
+    // …and the next plausible amount still wins
+    assert.equal(extraerPrecioMax('12.000 €/mes o hasta 300.000 de compra'), 300000);
+  });
+
+  it('returns fast on a pathological digit run (no quadratic backtracking)', () => {
+    const t0 = performance.now();
+    assert.equal(extraerPrecioMax('9'.repeat(50_000)), null);
+    assert.equal(extraerPrecioMax(`hasta ${'1'.repeat(50_000)}`), null);
+    assert.ok(performance.now() - t0 < 100, `took ${Math.round(performance.now() - t0)} ms`);
   });
 
   it('reads rooms in Spanish and English, null when absent', () => {
@@ -498,6 +523,12 @@ describe('candidatos', () => {
     const vendido = lead({ etapa: 'vendido', mensaje: 'Chamberí' });
     const parked = lead({ etapa: 'nutriendo', mensaje: 'Chamberí' });
     assert.deepEqual(cands([vendido, parked]).map((c) => c.lead.id), [parked.id]);
+  });
+
+  it('cuts an unbounded municipio in the reasons', () => {
+    const largo = { ...chamberi, municipio: 'x'.repeat(500) };
+    const out = candidatos(largo, normalizarLeads([lead({ mensaje: 'algo', expand: { propiedad: largo } })], MUNICIPIOS));
+    assert.equal(out[0].motivos[0], `zona ${'x'.repeat(MAX_NOMBRE)} (por la propiedad que consultó)`);
   });
 
   it('a property without a town has no candidates', () => {

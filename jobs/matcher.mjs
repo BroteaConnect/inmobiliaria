@@ -14,7 +14,11 @@ import { candidatos, esReciente, normalizarLeads, textoShortlist, vocabularioMun
 export const when = { daily: '09:30' };
 
 const SHORTLIST_IDS = 10; // lead ids kept in the event payload
-const VENTANA_HORAS = 24; // a property "just published/updated" gets a shortlist
+// A property "just published/updated" gets a shortlist. The window is the
+// daily cadence plus the runner's 6 h grace: a run delayed into the grace
+// still sees yesterday's edits (and may repeat a shortlist once — the jobs
+// are stateless and see no event history; docs/jobs.md says so).
+const VENTANA_HORAS = 24 + 6;
 
 // Who is on duty: settings row `agentes.guardia` = { v: 1, text: <users id> }.
 // Anything missing or broken degrades to null (the line then says
@@ -46,8 +50,11 @@ export async function run({ pb, notify, event, log, now }) {
   log(`matcher: ${publicadas.length} published of ${todas.length} properties, ${leads.length} open lead(s), ${municipios.length} town(s), on-duty agent ${guardia ? 'resolved' : 'unknown'}`);
 
   let notified = 0;
+  const failed = [];
   for (const p of publicadas) {
-    // One bad row must not take the other properties down with it.
+    // One bad row must not take the other properties down with it — but a
+    // failure is still a failure: collected here, rethrown after the loop so
+    // the runner records the run as failed and Alertas hears about it.
     try {
       const cands = candidatos(p, leadsNorm);
       // Always said, for every published property: the E4 gate reads this line.
@@ -63,7 +70,9 @@ export async function run({ pb, notify, event, log, now }) {
       notified++;
     } catch (e) {
       log(`matcher: property ${p.id} skipped: ${e?.message ?? e}`);
+      failed.push(p.id);
     }
   }
+  if (failed.length) throw new Error(`${failed.length} of ${publicadas.length} properties failed: ${failed.join(', ')}`);
   return `${publicadas.length} properties scored, ${notified} shortlist(s)`;
 }

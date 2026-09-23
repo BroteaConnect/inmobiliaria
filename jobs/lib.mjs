@@ -229,7 +229,7 @@ export function textoResumen(resumen, now) {
 // Lowercase, accents stripped (NFD, then the combining marks), spaces collapsed:
 // "Chamberí" and "  CHAMBERI " are the same town.
 export const normalizarTexto = (s) =>
-  String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+  String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 
 // Distinct normalised `municipio` values of a set of properties — the town
 // vocabulary. Built from ALL properties: an unpublished listing still tells us
@@ -239,28 +239,55 @@ export const vocabularioMunicipios = (propiedades) =>
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // A town counts only as a whole token: "madrid" is not in "madridejos", and
-// "lakes towers" is not "jumeirah lakes towers".
-const contieneEntero = (texto, termino) =>
-  new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapeRe(termino)}(?=$|[^\\p{L}\\p{N}])`, 'u').test(texto);
+// "lakes towers" is not "jumeirah lakes towers". A "de <word>" tail belongs
+// to the town's name ("las rozas de madrid", "getafe de la sierra") and is
+// part of the match, so blanking the span also blanks the qualifier.
+const reEntero = (termino) =>
+  new RegExp(`(?<=^|[^\\p{L}\\p{N}])${escapeRe(termino)}(?:\\s+de\\s+(?:l[aoe]s?\\s+)?\\p{L}+)?(?=$|[^\\p{L}\\p{N}])`, 'gu');
+// The towns named in `texto`, longest first, each match blanked before the
+// shorter towns are tried: "las rozas de madrid" is Las Rozas, not Madrid too.
+const zonasEnTexto = (texto, municipios) => {
+  const found = [];
+  let resto = texto;
+  for (const m of [...municipios].filter(Boolean).sort((a, b) => b.length - a.length)) {
+    const re = reEntero(m);
+    if (!re.test(resto)) continue;
+    found.push(m);
+    resto = resto.replace(re, (x) => ' '.repeat(x.length));
+  }
+  return found;
+};
 
 // An amount is a number with a money marker: a prefix (~ € $ or a budget
 // word), a suffix (k, m, mil, millones, €), or thousands separators. A bare
 // number is NOT an amount — "unidad 1413" is a flat, "29/12/2022" a date,
 // "120 m2" a surface (the m may not be followed by a digit or ²) — and a
 // budget word before a small bare number ("hasta 4 habitaciones") is not one
-// either: without suffix or separators the number needs 4+ digits.
-const RE_IMPORTE = /(?:(hasta|presupuesto|max|maximo|budget|precio|tope|~|€|\$)\s*(?:de\s+|of\s+)?:?\s*)?(\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)\s*(k|m|mil|millones|millon|€|eur|euros)?(?![\p{L}\p{N}²])/gu;
+// either: without suffix or separators the number needs 4+ digits. Then a
+// plausibility band: a home costs between 10 000 and 100 000 000, so
+// "hasta 2024" (a year) and "tel 600.123.456" (a phone, also excluded by
+// shape) are not budgets; "3 m de fachada" is a length ("m de" is never
+// money) and "12.000 €/mes" is a rent, not a purchase budget.
+// Digit runs are bounded and the text is cut at IMPORTE_MAX_CHARS: an
+// unbounded `\d+(?:[.,]\d+)?` backtracks quadratically on a long digit run
+// (a 20 000-digit message took seconds), and a real wish fits in 4000 chars.
+const RE_IMPORTE = /(?:(hasta|presupuesto|max|maximo|budget|precio|tope|~|€|\$)\s*(?:de\s+|of\s+)?:?\s*)?(\d{1,3}(?:[.,]\d{3}){1,5}|\d{1,15}(?:[.,]\d{1,15})?)\s*(k|m(?!\s*de\b)|mil|millones|millon|€|eur|euros)?(?![\p{L}\p{N}²])(\s*(?:€|eur(?:os)?)?\s*(?:\/|al |por )\s*mes)?/gu;
+const RE_TELEFONO = /^\d{3}[.]\d{3}[.]\d{3}$/;
 const FACTOR = { k: 1e3, mil: 1e3, m: 1e6, millon: 1e6, millones: 1e6 };
+export const IMPORTE_MIN = 10_000;
+export const IMPORTE_MAX = 100_000_000;
+const IMPORTE_MAX_CHARS = 4000;
 export function extraerPrecioMax(texto) {
-  for (const m of texto.matchAll(RE_IMPORTE)) {
-    const [, prefijo, numero, sufijo] = m;
+  for (const m of String(texto).slice(0, IMPORTE_MAX_CHARS).matchAll(RE_IMPORTE)) {
+    const [, prefijo, numero, sufijo, mensual] = m;
+    if (mensual || RE_TELEFONO.test(numero)) continue;
     const separado = /^\d{1,3}(?:[.,]\d{3})+$/.test(numero);
     const soloDigitos = numero.replace(/\D/g, '');
     if (!prefijo && !sufijo && !separado) continue;
     if (prefijo && !sufijo && !separado && soloDigitos.length < 4) continue;
     const base = separado ? Number(soloDigitos) : Number(numero.replace(',', '.'));
     const valor = Math.round(base * (FACTOR[sufijo] || 1));
-    if (Number.isFinite(valor) && valor > 0) return valor;
+    if (Number.isFinite(valor) && valor >= IMPORTE_MIN && valor <= IMPORTE_MAX) return valor;
   }
   return null;
 }
@@ -277,7 +304,7 @@ export function extraerHabitaciones(texto) {
 // wrote more than a town we only infer from the listing they clicked.
 export function normalizarCriterios(lead, municipios) {
   const texto = normalizarTexto(`${lead.criterios ?? ''} ${lead.mensaje ?? ''}`);
-  const zona_texto = municipios.filter((m) => m && contieneEntero(texto, m));
+  const zona_texto = zonasEnTexto(texto, municipios);
   const pista = normalizarTexto(lead.expand?.propiedad?.municipio);
   const zona = pista && !zona_texto.includes(pista) ? [...zona_texto, pista] : [...zona_texto];
   return { zona, zona_texto, precio_max: extraerPrecioMax(texto), habitaciones: extraerHabitaciones(texto) };
@@ -300,6 +327,8 @@ export const MARGEN_PRECIO = 1.15;
 export function candidatos(propiedad, leadsNorm) {
   const municipio = normalizarTexto(propiedad.municipio);
   if (!municipio) return [];
+  // municipio has no max in the schema: cut it once here, escape in the message.
+  const etiqueta = municipio.slice(0, MAX_NOMBRE);
   const out = [];
   for (const { lead, norm } of leadsNorm) {
     if (lead.etapa === 'vendido') continue;
@@ -308,10 +337,10 @@ export function candidatos(propiedad, leadsNorm) {
     let score = 0;
     if (norm.zona_texto.includes(municipio)) {
       score += PESO_ZONA_TEXTO;
-      motivos.push(`zona ${municipio}`);
+      motivos.push(`zona ${etiqueta}`);
     } else {
       score += PESO_ZONA_PISTA;
-      motivos.push(`zona ${municipio} (por la propiedad que consultó)`);
+      motivos.push(`zona ${etiqueta} (por la propiedad que consultó)`);
     }
     if (norm.precio_max == null) {
       score += PESO_PRECIO;

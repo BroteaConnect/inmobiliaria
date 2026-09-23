@@ -94,15 +94,37 @@ wake up). Best score first.
 
 What it says: the log gets one line per published property, always —
 `matcher: <n> candidate(s) for <propiedad id>` — which is what the E4 gate
-reads. Telegram only hears about a property `updated` in the last 24 h with at
-least one candidate: one message per property, `• <b>lead</b> · agent ·
+reads. Telegram only hears about a property `updated` in the last 30 h (the
+daily cadence plus the runner's 6 h grace) with at least one candidate: one message per property, `• <b>lead</b> · agent ·
 reasons`, the agent being the lead's `asignado`, else the on-duty agent
 (settings row `agentes.guardia` = `{ v: 1, text: <users id> }`, resolved to
 its name), else "sin asignar"; capped at 10 lines + "… y N más", every name
 cut to 80 chars and HTML-escaped, and the same CRM footer as the agenda. The
 platform event `matcher.shortlist` `{ propiedad_id, candidates, lead_ids
 (top 10) }` is written **before** `notify()`. One broken row is logged and
-skipped; the run returns `<n> properties scored, <m> shortlist(s)`.
+skipped so the other properties still get their line, but the run then fails
+with `<k> of <n> properties failed: <ids>` — a broken send or insert reaches
+Alertas instead of hiding behind a green run. On success it returns
+`<n> properties scored, <m> shortlist(s)`.
+
+Honest limits of "touched in the last 30 h": the jobs are stateless and see
+no event history, so a run delayed into the grace window may repeat
+yesterday's shortlist once, and any edit of a published property (a photo, a
+price) re-sends its shortlist the next morning — that is the "touched"
+semantics the team asked for, not a bug. De-duplicating against the
+`matcher.shortlist` events would need the runner to expose them to `ctx`.
+
+Where the live data stands (2026-09-23): the 216 historical leads carry no
+price and no recognisable town — the importer's `criterios` names the Dubai
+building the buyer bought in (`Seven City JLT`, `MBL Royal`…), not a
+`municipio`, so no vocabulary town appears in any lead's text. The only
+candidate today is the demo web lead, matched through the Madrid property it
+asked about. The matcher will stay nearly silent until the importer maps a
+building to its municipio (every JLT building → `Jumeirah Lakes Towers`) or
+the vocabulary grows with the towns the leads actually write. Data fix for the
+CRM: one unpublished property carries the literal `municipio` value
+`Master Project` (a column header that leaked through the import); it sits in
+the vocabulary as a junk town until the row is corrected.
 
 Out of scope until E5: the WhatsApp half of the flow — asking the lead
 "¿te encaja?" and turning a "sí" into `propiedad.encaja` on the lead. A
