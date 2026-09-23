@@ -216,13 +216,14 @@ export function textoResumen(resumen, now) {
 // (the CSV importer writes "Compró en <master project> · <edificio> · unidad N
 // · ~<precio> · …", the web form writes whatever the visitor typed) and the
 // `mensaje` is prose. So the wish is DERIVED here, per lead, and never stored:
-//   zona          the towns named in the text — matched against the vocabulary
-//                 of real `municipio` values (every property, published or
-//                 not), plus the town of the property the lead asked about
+//   zona          the zones named in the text — matched against the vocabulary
+//                 of every property's zones (municipio, master project and
+//                 building; every property, published or not), plus the zones
+//                 of the property the lead asked about
 //   precio_max    the first amount in the text (~1200000, 550k, 1.2m,
 //                 1,200,000, "hasta 300.000") — null when none
 //   habitaciones  "4 habitaciones" / "3 hab" / "2 bedrooms" — null when none
-// The town is the only hard rule: a lead who never named the town, nor asked
+// The zone is the only hard rule: a lead who never named the zone, nor asked
 // about a property there, is not a candidate no matter the price. Price and
 // rooms only reorder (and an unknown is not a mismatch).
 
@@ -237,15 +238,81 @@ export const normalizarTexto = (s) =>
 export const vocabularioMunicipios = (propiedades) =>
   [...new Set(propiedades.map((p) => normalizarTexto(p.municipio)).filter(Boolean))];
 
+// A Dubai transaction export has three zone levels — Master Project,
+// Area/Community, BuildingNameEn — and the importer used to store the first
+// verbatim, "-" and "N/A" included. Stored, that junk entered the vocabulary
+// and every historical lead carrying the same junk in its criterios became a
+// candidate for every property carrying it. So a cell is a zone only when it
+// says something.
+//
+// TWIN FILE: `JUNK` and `esZonaValida` in src/crm/import-mapping.ts of
+// BroteaConnect/inmobiliaria-crm carry the same list and the same rules (the
+// CRM adds an 80-char cap the matcher deliberately lacks: an unbounded
+// municipio still matches here and is cut only in the message). Change one,
+// change the other, and keep the vector tables of both test files identical.
+// AHEAD OF THE TWIN (2026-09-23): the last three JUNK_ZONA words (the
+// header row that leaked through one import, its typo included) and the
+// 3-char minimum are not in the CRM yet — its next change takes both.
+export const JUNK_ZONA = [
+  'master project', 'masterproject', 'project', 'area', 'community', 'district',
+  'municipio', 'zona', 'n/a', 'na', 'none', 'null', 'nil', 'tbd', 'unknown',
+  'desconocido', 'sin datos', 'building name', 'project name', 'proejct name',
+];
+const RE_SOLO_SIMBOLOS = /^[\p{P}\p{S}\s]+$/u;
+const RE_NUMERICO = /^[\d.,\s-]+$/;
+const MIN_ZONA = 3; // "v3", "ok": a token that short is a code, not a place
+const compacta = (v) => String(v ?? '').trim().replace(/\s+/g, ' ');
+// False when: empty or under MIN_ZONA chars; only punctuation/symbols ("-",
+// "—"); numeric ("0", "12"); a JUNK_ZONA word after lowercasing and
+// collapsing spaces.
+export const esZonaValida = (v) => {
+  const s = compacta(v);
+  if (s.length < MIN_ZONA || RE_SOLO_SIMBOLOS.test(s) || RE_NUMERICO.test(s)) return false;
+  return !JUNK_ZONA.includes(s.toLowerCase());
+};
+
+// The raw cells a property's zones come from, in priority order: municipio,
+// master project, building — and, only for a row imported BEFORE `edificio`
+// existed (no building field, a "zona · edificio · unidad N" title), the
+// title's segments minus the unit. The unit segment is the proof that the
+// importer wrote the title: a hand-typed "Ático · 2 hab · terraza" has none
+// and stays prose. A row with a building ignores its title too: the title
+// is prose once the fields are there. `\b`, not `\s`: a bare "unidad"
+// segment is a unit with no number, never a zone every "· unidad NNNN ·"
+// criterios would match.
+const RE_UNIDAD = /^unidad\b/i;
+const celdasZona = (p) => {
+  const segs = String(p?.titulo ?? '').split(' · ');
+  const esUnidad = (seg) => RE_UNIDAD.test(seg.trim());
+  const delTitulo = !p?.edificio && segs.some(esUnidad) ? segs.filter((seg) => !esUnidad(seg)) : [];
+  return [p?.municipio, p?.proyecto, p?.edificio, ...delTitulo].map(compacta);
+};
+
+// The normalised, junk-free, distinct zones of one property. Empty when the
+// row names no zone at all — such a property has no candidates.
+export const zonasDePropiedad = (p) =>
+  [...new Set(celdasZona(p).map(normalizarTexto).filter(esZonaValida))];
+
+// The raw spelling of the property's first zone, for the shortlist header:
+// "(Chamberí)", not "(chamberi)". Null when the property has none.
+const etiquetaZona = (p) => celdasZona(p).find((c) => esZonaValida(normalizarTexto(c))) ?? null;
+
+// Distinct zones of a set of properties — the vocabulary the leads' texts are
+// searched for. Built from ALL properties: an unpublished listing still tells
+// us that "marina gate 1" is a building this agency works.
+export const vocabularioZonas = (propiedades) =>
+  [...new Set(propiedades.flatMap(zonasDePropiedad))];
+
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-// A town counts only as a whole token: "madrid" is not in "madridejos", and
-// "lakes towers" is not "jumeirah lakes towers". A "de <word>" tail belongs
-// to the town's name ("las rozas de madrid", "getafe de la sierra") and is
-// part of the match, so blanking the span also blanks the qualifier.
+// A zone counts only as a whole token: "madrid" is not in "madridejos",
+// "lakes towers" is not "jumeirah lakes towers", and "marina gate 1" is not
+// "marina gate 12". A "de <word>" tail belongs to the town's name ("las rozas
+// de madrid", "getafe de la sierra") and is part of the match, so blanking
+// the span also blanks the qualifier.
 const reEntero = (termino) =>
   new RegExp(`(?<=^|[^\\p{L}\\p{N}])${escapeRe(termino)}(?:\\s+de\\s+(?:l[aoe]s?\\s+)?\\p{L}+)?(?=$|[^\\p{L}\\p{N}])`, 'gu');
-// The towns named in `texto`, longest first, each match blanked before the
-// shorter towns are tried: "las rozas de madrid" is Las Rozas, not Madrid too.
+// The zones named in `texto`, longest first, each match blanked before the
+// shorter zones are tried: "las rozas de madrid" is Las Rozas, not Madrid too.
 const zonasEnTexto = (texto, municipios) => {
   const found = [];
   let resto = texto;
@@ -298,44 +365,49 @@ export function extraerHabitaciones(texto) {
   return m ? Number(m[1]) : null;
 }
 
-// The derived wish of one lead. `zona` is every vocabulary town found in the
-// text plus the town of the linked property (`expand.propiedad`); `zona_texto`
-// is the subset that came from the text — the scorer pays a town the lead
-// wrote more than a town we only infer from the listing they clicked.
-export function normalizarCriterios(lead, municipios) {
+// The derived wish of one lead. `zona` is every vocabulary zone found in the
+// text plus the zones of the linked property (`expand.propiedad`: its town,
+// master project and building); `zona_texto` is the subset that came from
+// the text — the scorer pays a zone the lead wrote more than one we only
+// infer from the listing they clicked.
+export function normalizarCriterios(lead, zonas) {
   const texto = normalizarTexto(`${lead.criterios ?? ''} ${lead.mensaje ?? ''}`);
-  const zona_texto = zonasEnTexto(texto, municipios);
-  const pista = normalizarTexto(lead.expand?.propiedad?.municipio);
-  const zona = pista && !zona_texto.includes(pista) ? [...zona_texto, pista] : [...zona_texto];
+  const zona_texto = zonasEnTexto(texto, zonas);
+  const pistas = zonasDePropiedad(lead.expand?.propiedad).filter((z) => !zona_texto.includes(z));
+  const zona = [...zona_texto, ...pistas];
   return { zona, zona_texto, precio_max: extraerPrecioMax(texto), habitaciones: extraerHabitaciones(texto) };
 }
 
-export const normalizarLeads = (leads, municipios) =>
-  leads.map((lead) => ({ lead, norm: normalizarCriterios(lead, municipios) }));
+export const normalizarLeads = (leads, zonas) =>
+  leads.map((lead) => ({ lead, norm: normalizarCriterios(lead, zonas) }));
 
 // Business rule: how much each signal weighs.
-export const PESO_ZONA_TEXTO = 3; // the lead named the town
-export const PESO_ZONA_PISTA = 2; // we only know the town from the listing they asked about
+export const PESO_ZONA_TEXTO = 3; // the lead named the zone
+export const PESO_ZONA_PISTA = 2; // we only know the zone from the listing they asked about
 export const PESO_PRECIO = 1; // unknown budget, or the price within 15 % of it
 export const PESO_HABITACIONES = 1; // unknown, or the property has at least that many
 export const MARGEN_PRECIO = 1.15;
 
 // Candidates for one property, best first: [{ lead, score, motivos }].
-// The town match is required; `vendido` leads are out (a buyer who already
-// bought is not shopping) — every other stage, `nutriendo` included, stays:
-// a parked lead is exactly who a new listing might wake up.
+// A zone match is required — any of the property's zones (town, master
+// project, building), a written one before an inferred one; `vendido` leads
+// are out (a buyer who already bought is not shopping) — every other stage,
+// `nutriendo` included, stays: a parked lead is exactly who a new listing
+// might wake up.
 export function candidatos(propiedad, leadsNorm) {
-  const municipio = normalizarTexto(propiedad.municipio);
-  if (!municipio) return [];
-  // municipio has no max in the schema: cut it once here, escape in the message.
-  const etiqueta = municipio.slice(0, MAX_NOMBRE);
+  const zonas = zonasDePropiedad(propiedad);
+  if (!zonas.length) return [];
   const out = [];
   for (const { lead, norm } of leadsNorm) {
     if (lead.etapa === 'vendido') continue;
-    if (!norm.zona.includes(municipio)) continue;
+    const escrita = zonas.find((z) => norm.zona_texto.includes(z));
+    const pista = escrita ?? zonas.find((z) => norm.zona.includes(z));
+    if (!pista) continue;
+    // a zone has no max in the schema: cut it once here, escape in the message.
+    const etiqueta = pista.slice(0, MAX_NOMBRE);
     const motivos = [];
     let score = 0;
-    if (norm.zona_texto.includes(municipio)) {
+    if (escrita) {
       score += PESO_ZONA_TEXTO;
       motivos.push(`zona ${etiqueta}`);
     } else {
@@ -384,9 +456,10 @@ export function textoShortlist(propiedad, cands, guardiaNombre, now) {
   if (cands.length > MAX_LINES) lines.push(`… y ${cands.length - MAX_LINES} más`);
   const n = cands.length;
   const titulo = recorta(propiedad.titulo || 'propiedad sin título');
-  const municipio = propiedad.municipio ? ` (${recorta(propiedad.municipio)})` : '';
+  const zona = etiquetaZona(propiedad);
+  const enZona = zona ? ` (${recorta(zona)})` : '';
   return [
-    `🎯 <b>Encaje</b> — ${madridHeader.format(now)} · ${titulo}${municipio} · ${n} ${n === 1 ? 'candidato' : 'candidatos'}:`,
+    `🎯 <b>Encaje</b> — ${madridHeader.format(now)} · ${titulo}${enZona} · ${n} ${n === 1 ? 'candidato' : 'candidatos'}:`,
     '',
     ...lines,
     '',

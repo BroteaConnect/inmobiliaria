@@ -71,12 +71,12 @@ property, "which open leads fit this?". The CRM stores no structured wish —
 form writes whatever the visitor typed) and `mensaje` is prose — so the wish is
 **derived** per lead at run time and never written back:
 
-- **zona**: every town of the vocabulary (the distinct, normalised `municipio`
-  of *all* properties, published or not) found as a whole token in
-  `criterios + mensaje`, plus the town of the property the lead asked about
-  (`leads.propiedad`). Normalisation is lowercase, accents stripped, spaces
-  collapsed: `Chamberí` and `chamberi` are one town; `madrid` is not found in
-  `madridejos`, nor `lakes towers` in `jumeirah lakes towers`.
+- **zona**: every zone of the vocabulary (see below) found as a whole token
+  in `criterios + mensaje`, plus the zones of the property the lead asked
+  about (`leads.propiedad`). Normalisation is lowercase, accents stripped,
+  spaces collapsed: `Chamberí` and `chamberi` are one town; `madrid` is not
+  found in `madridejos`, nor `lakes towers` in `jumeirah lakes towers`, nor
+  `marina gate 1` in `marina gate 12`.
 - **precio_max**: the first amount in the text (`~1200000`, `550k`, `1.2m`,
   `1,200,000`, `hasta 300.000`, `presupuesto 550k`). A bare number is not an
   amount (`unidad 1413` is a flat, `29/12/2022` a date, `120 m2` a surface).
@@ -84,9 +84,26 @@ form writes whatever the visitor typed) and `mensaje` is prose — so the wish i
 - **habitaciones**: `4 habitaciones` / `3 hab` / `2 bedrooms` / `3br`; `null`
   when absent.
 
-Scoring (`candidatos()` in `jobs/lib.mjs`): the town is the only hard rule —
-a lead who never named the town, nor asked about a listing there, is not a
-candidate no matter the budget. Town written in the text +3, town known only
+The zone vocabulary (`vocabularioZonas()`, 2026-09-23): a property names up
+to three zones — `municipio` (the Dubai export's Master Project), `proyecto`
+and `edificio` (its building) — and, for a row imported before `edificio`
+existed, the segments of its `zona · edificio · unidad N` title minus the
+unit (the `unidad` segment is the proof the importer wrote the title; a
+hand-typed `Ático · 2 hab · terraza` stays prose). `zonasDePropiedad()`
+normalises them and drops what is not a zone (`esZonaValida()`: under 3
+chars, only symbols like `-`/`—`, numeric, or a placeholder word of
+`JUNK_ZONA` — `N/A`, `Master Project`, `Building Name`, `none`…). Built
+from *all* properties, published or not. The same list and rules live in the
+CRM importer (`src/crm/import-mapping.ts`, which now stores `edificio` and
+`proyecto` on import); the two test files pin the same vectors. Without the
+junk rule, every historical lead whose `criterios` read `Compró en - · …`
+was a candidate for every property whose `municipio` was `-`. The old
+`vocabularioMunicipios()` stays exported but the matcher no longer uses it.
+
+Scoring (`candidatos()` in `jobs/lib.mjs`): the zone is the only hard rule —
+a lead who never named one of the property's zones (town, master project or
+building), nor asked about a listing there, is not a candidate no matter the
+budget. Zone written in the text +3, zone known only
 from the linked listing +2, budget unknown or `precio <= precio_max × 1.15`
 +1, rooms unknown or `habitaciones >= wanted` +1. Only `vendido` leads are
 excluded (`nutriendo` stays: a parked lead is exactly who a new listing might
@@ -115,16 +132,15 @@ semantics the team asked for, not a bug. De-duplicating against the
 `matcher.shortlist` events would need the runner to expose them to `ctx`.
 
 Where the live data stands (2026-09-23): the 216 historical leads carry no
-price and no recognisable town — the importer's `criterios` names the Dubai
-building the buyer bought in (`Seven City JLT`, `MBL Royal`…), not a
-`municipio`, so no vocabulary town appears in any lead's text. The only
-candidate today is the demo web lead, matched through the Madrid property it
-asked about. The matcher will stay nearly silent until the importer maps a
-building to its municipio (every JLT building → `Jumeirah Lakes Towers`) or
-the vocabulary grows with the towns the leads actually write. Data fix for the
-CRM: one unpublished property carries the literal `municipio` value
-`Master Project` (a column header that leaked through the import); it sits in
-the vocabulary as a junk town until the row is corrected.
+price and no `municipio` — the importer's `criterios` names the Dubai
+building the buyer bought in (`Seven City JLT`, `MBL Royal`…). Since the zone
+vocabulary reads buildings, a lead matches the moment a property of that
+building is published with its `edificio` set (or a legacy title naming it);
+the demo web lead still matches through the Madrid property it asked about.
+The unpublished property whose `municipio` is the literal `Master Project`
+(a column header that leaked through the import) no longer reaches the
+vocabulary: `esZonaValida()` drops it. Correcting the row is still the right
+data fix.
 
 Out of scope until E5: the WhatsApp half of the flow — asking the lead
 "¿te encaja?" and turning a "sí" into `propiedad.encaja` on the lead. A

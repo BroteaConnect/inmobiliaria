@@ -80,6 +80,14 @@
           "type": "text"
         },
         {
+          "name": "proyecto",
+          "type": "text"
+        },
+        {
+          "name": "edificio",
+          "type": "text"
+        },
+        {
           "name": "precio",
           "type": "number"
         },

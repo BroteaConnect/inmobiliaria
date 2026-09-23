@@ -150,6 +150,8 @@ all five actions (`list`, `view`, `create`, `update`, `delete`) are
 | `leads` | `asignado` | relation → `users` (max 1) | the agent who owns the lead; empty = unassigned |
 | `leads` | `canal_preferido` | select `email` \| `whatsapp` | the lead's preferred delivery channel |
 | `leads` | `idioma` | select `es` \| `en` | the language the lead is written to in |
+| `propiedades` | `proyecto` | text | master project / development the unit belongs to (E5, 2026-09-23); a zone for the matcher |
+| `propiedades` | `edificio` | text | building name (E5, 2026-09-23); a zone for the matcher — the importer stores BuildingNameEn here |
 | `propietarios` | `consentimiento` | bool | marketing consent |
 | `propietarios` | `consentimiento_en` | date | when the consent was recorded |
 | `actividades` | `campana` | relation → `campanas` (max 1) | set when a campaign, not a person, generated the activity |
