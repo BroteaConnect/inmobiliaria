@@ -164,6 +164,20 @@ curl -X PATCH "$PB/api/collections/leads/records/$ID" \
 
 One row per `clave` and channel, written in both app languages.
 
+The catalog of record is `pb/plantillas.json` (thirty rows, validated by
+`pb/plantillas.test.mjs`): a bare `clave` is the WhatsApp template
+(`visita.confirmacion`) and the `.email` suffix is its email sibling
+(`visita.confirmacion.email`). `variables` is an ordered array — index *i* is
+Twilio's positional `{{i+1}}`, so reordering it is a content change. The seed,
+`node pb/plantillas.mjs [--dry-run] [--force]`, keys rows by `clave` and speaks
+three verbs: `created` (new row, `estado` borrador, `version` 1), `kept` (already
+there; also under `--force` when the content is unchanged or the instance version
+is newer) and `updated` (`--force` only: content replaced and the Twilio lifecycle
+reset). Rows on the instance that the catalog does not know are reported and never
+deleted. `content_sid`/`content_estado`/`content_motivo` describe the Spanish Twilio
+Content and `content_sid_en`/`content_estado_en`/`content_motivo_en` the English one;
+both are created by one chassis `/content/submit`.
+
 | Field | Type | Notes |
 |---|---|---|
 | `clave` | text, required, max 80, pattern `^[a-z0-9_.]+$` | stable key; uniqueness is enforced by the CRM (read before write), not by the schema |
@@ -179,6 +193,9 @@ One row per `clave` and channel, written in both app languages.
 | `content_sid` | text, max 40 | Twilio Content API id (WhatsApp) |
 | `content_estado` | select `unsubmitted` \| `received` \| `pending` \| `approved` \| `rejected` \| `paused` \| `disabled` | Twilio's approval status, stored verbatim |
 | `content_motivo` | text | Twilio's rejection reason |
+| `content_sid_en` | text, max 40 | Twilio Content API id of the English template |
+| `content_estado_en` | select, same values as `content_estado` | Twilio's approval status of the English template |
+| `content_motivo_en` | text | Twilio's rejection reason for the English template |
 
 ### `campanas` — outbound campaigns
 
