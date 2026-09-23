@@ -88,9 +88,11 @@ The zone vocabulary (`vocabularioZonas()`, 2026-09-23): a property names up
 to three zones — `municipio` (the Dubai export's Master Project), `proyecto`
 and `edificio` (its building) — and, for a row imported before `edificio`
 existed, the segments of its `zona · edificio · unidad N` title minus the
-unit. `zonasDePropiedad()` normalises them and drops what is not a zone
-(`esZonaValida()`: empty, only symbols like `-`/`—`, numeric, or a
-placeholder word of `JUNK_ZONA` — `N/A`, `Master Project`, `none`…). Built
+unit (the `unidad` segment is the proof the importer wrote the title; a
+hand-typed `Ático · 2 hab · terraza` stays prose). `zonasDePropiedad()`
+normalises them and drops what is not a zone (`esZonaValida()`: under 3
+chars, only symbols like `-`/`—`, numeric, or a placeholder word of
+`JUNK_ZONA` — `N/A`, `Master Project`, `Building Name`, `none`…). Built
 from *all* properties, published or not. The same list and rules live in the
 CRM importer (`src/crm/import-mapping.ts`, which now stores `edificio` and
 `proyecto` on import); the two test files pin the same vectors. Without the

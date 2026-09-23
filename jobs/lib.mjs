@@ -250,33 +250,41 @@ export const vocabularioMunicipios = (propiedades) =>
 // CRM adds an 80-char cap the matcher deliberately lacks: an unbounded
 // municipio still matches here and is cut only in the message). Change one,
 // change the other, and keep the vector tables of both test files identical.
+// AHEAD OF THE TWIN (2026-09-23): the last three JUNK_ZONA words (the
+// header row that leaked through one import, its typo included) and the
+// 3-char minimum are not in the CRM yet — its next change takes both.
 export const JUNK_ZONA = [
   'master project', 'masterproject', 'project', 'area', 'community', 'district',
   'municipio', 'zona', 'n/a', 'na', 'none', 'null', 'nil', 'tbd', 'unknown',
-  'desconocido', 'sin datos',
+  'desconocido', 'sin datos', 'building name', 'project name', 'proejct name',
 ];
 const RE_SOLO_SIMBOLOS = /^[\p{P}\p{S}\s]+$/u;
 const RE_NUMERICO = /^[\d.,\s-]+$/;
+const MIN_ZONA = 3; // "v3", "ok": a token that short is a code, not a place
 const compacta = (v) => String(v ?? '').trim().replace(/\s+/g, ' ');
-// False when: empty; only punctuation/symbols ("-", "—"); numeric ("0",
-// "12"); a JUNK_ZONA word after lowercasing and collapsing spaces.
+// False when: empty or under MIN_ZONA chars; only punctuation/symbols ("-",
+// "—"); numeric ("0", "12"); a JUNK_ZONA word after lowercasing and
+// collapsing spaces.
 export const esZonaValida = (v) => {
   const s = compacta(v);
-  if (!s || RE_SOLO_SIMBOLOS.test(s) || RE_NUMERICO.test(s)) return false;
+  if (s.length < MIN_ZONA || RE_SOLO_SIMBOLOS.test(s) || RE_NUMERICO.test(s)) return false;
   return !JUNK_ZONA.includes(s.toLowerCase());
 };
 
 // The raw cells a property's zones come from, in priority order: municipio,
 // master project, building — and, only for a row imported BEFORE `edificio`
 // existed (no building field, a "zona · edificio · unidad N" title), the
-// title's segments minus the unit. A row with a building ignores its title:
-// the title is prose once the fields are there.
-const RE_UNIDAD = /^unidad\s/i;
+// title's segments minus the unit. The unit segment is the proof that the
+// importer wrote the title: a hand-typed "Ático · 2 hab · terraza" has none
+// and stays prose. A row with a building ignores its title too: the title
+// is prose once the fields are there. `\b`, not `\s`: a bare "unidad"
+// segment is a unit with no number, never a zone every "· unidad NNNN ·"
+// criterios would match.
+const RE_UNIDAD = /^unidad\b/i;
 const celdasZona = (p) => {
-  const titulo = String(p?.titulo ?? '');
-  const delTitulo = !p?.edificio && titulo.includes(' · ')
-    ? titulo.split(' · ').filter((seg) => !RE_UNIDAD.test(seg.trim()))
-    : [];
+  const segs = String(p?.titulo ?? '').split(' · ');
+  const esUnidad = (seg) => RE_UNIDAD.test(seg.trim());
+  const delTitulo = !p?.edificio && segs.some(esUnidad) ? segs.filter((seg) => !esUnidad(seg)) : [];
   return [p?.municipio, p?.proyecto, p?.edificio, ...delTitulo].map(compacta);
 };
 

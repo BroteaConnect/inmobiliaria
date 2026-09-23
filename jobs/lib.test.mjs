@@ -568,6 +568,10 @@ describe('esZonaValida', () => {
     }
     const malas = ['', '-', '—', 'N/A', 'n/a', '0', '12', 'Master Project', 'master  project'];
     for (const v of malas) assert.equal(esZonaValida(v), false, JSON.stringify(v));
+    // Ahead of the twin (the CRM's next change takes both): the leaked header
+    // row and the 3-char minimum. "JLT" is the shortest real zone.
+    for (const v of ['Building Name', 'Project Name', 'proejct name', 'v3', 'ok']) assert.equal(esZonaValida(v), false, v);
+    assert.equal(esZonaValida('JLT'), true);
     for (const j of JUNK_ZONA) assert.equal(esZonaValida(j.toUpperCase()), false, j);
     // The CRM rejects this one (its 80-char cap); the matcher has no cap —
     // "cuts an unbounded municipio in the reasons" pins that a 500-char town
@@ -595,6 +599,15 @@ describe('zonasDePropiedad / vocabularioZonas', () => {
     assert.deepEqual(zonasDePropiedad({ municipio: 'Madrid', titulo: 'Piso en Chamberí' }), ['madrid']);
   });
 
+  it('a hand-typed title with separators but no unit segment stays prose', () => {
+    assert.deepEqual(zonasDePropiedad({ municipio: 'Madrid', titulo: 'Ático · 2 hab · terraza' }), ['madrid']);
+  });
+
+  it('a bare "unidad" segment is a unit with no number, never a zone', () => {
+    assert.deepEqual(zonasDePropiedad({ titulo: 'Piso · unidad' }), ['piso']);
+    assert.deepEqual(zonasDePropiedad({ titulo: 'Piso · Unidad · unidad 12' }), ['piso']);
+  });
+
   it('ignores the title once the row carries an edificio', () => {
     const p = { municipio: '-', edificio: 'Burj Vista 1', titulo: 'Old Town · Burj Vista 1 · unidad 2205' };
     assert.deepEqual(zonasDePropiedad(p), ['burj vista 1']);
@@ -614,7 +627,7 @@ describe('zonasDePropiedad / vocabularioZonas', () => {
   });
 });
 
-describe('candidatos por zona (edificio y master project)', () => {
+describe('candidatos by zone (building and master project)', () => {
   const ZONAS = vocabularioZonas(DUBAI);
   const cands = (leads, prop) => candidatos(prop, normalizarLeads(leads, ZONAS));
 
