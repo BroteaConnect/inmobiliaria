@@ -27,6 +27,7 @@ aislamiento de fallos, reintentos) es del chasis y no se copia.
 | `jobs/agenda.mjs` | 09:00 | Leads con más de **48 h** sin contacto, el más abandonado primero. `⚠️` a partir de 5 días. Máximo 10 líneas + "… y N más". |
 | `jobs/resumen.mjs` | 20:00 | Resumen del día: leads nuevos, importados a la cartera, contactos salientes por canal, mensajes entrantes, emails entregados y propiedades publicadas. |
 | `jobs/matcher.mjs` | 09:30 | Shortlist de leads que encajan con cada propiedad publicada o tocada en las últimas 24 h (ver [matcher](#matcher)). |
+| `jobs/campanas.mjs` | cada hora | Solo habla cuando una campaña se prepara, se completa, se pausa o se bloquea. Lo que envía son mensajes a los leads a través del chasis, no avisos al equipo (ver [campanas](#campanas)). |
 
 **El silencio es una feature**: si no hay leads desatendidos o el día está
 vacío, no se envía nada. Un canal que solo habla cuando hay algo que decir
@@ -148,23 +149,196 @@ business-initiated WhatsApp message needs a Twilio Content template (or the
 lead's own 24-hour window, which a lead who wrote weeks ago no longer has);
 that template is E5's deliverable, and the matcher will call it from there.
 
+## campanas
+
+`jobs/campanas.mjs` runs every hour and is the only job that writes to the
+database. It picks up the campaigns a human put in `programada` or `en_curso`,
+works out who is still owed a message, and hands the ones this hour allows to
+the chassis — one at a time, inside the campaign's window, never more than
+`MAX_ENVIOS_POR_RUN` (10) in a single run, whatever the settings say. All the
+rules live in `jobs/campanas.lib.mjs` with tests; `jobs/campanas.test.mjs` runs
+the job itself against a fake PocketBase and a fake chassis.
+
+Order of one run, per campaign: repair the links a previous run could not
+write → resolve what was in flight → check the preconditions → compute the
+quota → send → close. Drafts are *armed* (a preview and a Telegram line, never
+a send) the first time they are seen.
+
+### `campanas.segmento` — who the campaign is for (contract v1)
+
+Declarative JSON, evaluated by pure code. An unknown key, an unknown value, a
+wrong type or a missing `v` is a loud refusal: the campaign sends nothing,
+writes `informe.bloqueo` and keeps its state. A segment that does not parse
+must never mean "everybody".
+
+| key | type | meaning |
+|---|---|---|
+| `v` | `1`, required | contract version |
+| `etapa` | `string[]` | `lead.etapa` is in the list |
+| `origen` | `string[]` | `lead.origen` is in the list, compared **normalised** (the importer writes `histórico`, with an accent) |
+| `consentimiento` | `true`/`false` | `true` matches `=== true`; `false` matches everyone else, the never-asked included |
+| `canal_preferido` | `string[]` ⊂ email/whatsapp | a field that is empty on the instance matches nobody — do not filter on it |
+| `idioma` | `string[]` ⊂ es/en | same warning |
+| `incluye_ids` | `string[]` | restricts the candidates; it never bypasses another rule |
+| `excluye_ids` | `string[]` | applied last, always wins |
+| `sin_contacto_dias` | int ≥ 0 | excludes leads contacted in the last N days; an empty `ultimo_contacto` means never contacted, which is eligible |
+| `max` | int ≥ 1 | hard cap, applied after a deterministic sort (`created` ascending, then `id`) |
+| `variables` | `{string: string}` | **not a filter**: the campaign's fixed template values (`url`, `municipio`…) |
+
+Reachability cannot be written in the JSON and is implicit in the template's
+channel: an email campaign needs a non-empty `leads.email`, a WhatsApp one a
+non-empty `leads.telefono`. Whoever fails is excluded as `sin_email` /
+`sin_telefono`, counted in the report, and never handed to the chassis.
+
+`baja_url` and `si_url` (`VARIABLES_DEL_CHASIS`) are minted and signed by the
+chassis with a secret only it holds. They are never built here, never sent and
+never counted as missing. Anything else a template declares must come from the
+lead (`nombre`, `agente`) or from `segmento.variables`; what is still missing
+blocks the campaign rather than shipping a body with a literal `{{municipio}}`
+in it.
+
+### `campanas.informe` — what happened (contract v1)
+
+Written by the job, read by a human. `armada_en` and `alcance_estimado` come
+from the arming preview (matched / reachable / unreachable, because "216
+recipients" when 25 of them have no phone is a number that gets approved and
+then disappoints); `enviados`, `estados` and `por_dia` are re-read from the
+`envios` ledger at every close, never accumulated in memory; `rechazos` tallies
+every chassis answer under its own code; `excluidos`, `reintentos`, `dudosos`,
+`en_vuelo` and `enlaces_fallidos` are the open questions; `bloqueo` is why
+nothing is going out; `informe_manager` records whether the manager's WhatsApp
+report went, and when it did not, exactly which precondition was missing.
+
+Delivery counters are a **snapshot**: `entregado` arrives by webhook minutes
+later, so a campaign that completes in the same run truthfully reports 0
+delivered and never updates it. The Telegram line says "a fecha del cierre".
+
+### Cadence, without ever sleeping
+
+The window is `hora_desde` ≤ now < `hora_hasta` in **Madrid local time**
+(`Intl`, so DST is never our problem); `hora_desde >= hora_hasta` is a
+configuration error, not a night shift, and is reported as one. "Already sent
+today" is counted from the `envios` rows of the campaign whose Madrid day is
+today and whose `estado` is not `error` — the ledger, never a counter we kept.
+The interval is spent as **credits**: an hourly runner cannot hold a process
+for eight hours, so a run may send `floor(minutes since ultimo_envio_en /
+intervalo_min)`, capped by what is left of `lote_diario` and by
+`MAX_ENVIOS_POR_RUN`.
+
+### The state machine
+
+The runner picks up **`programada`** and **`en_curso`** and writes exactly four
+transitions:
+
+- `programada → en_curso` on the first successful send
+- `en_curso → completada` when nobody is left AND nothing is unresolved (an
+  empty segment completes on the first run with 0 recipients — honest, not a
+  bug)
+- `en_curso → pausada` after three runs in a row that sent nothing, with the
+  reason in `informe.bloqueo`
+- nothing else. `borrador` is only armed; `pausada`, `completada` and
+  `cancelada` are a human's decision and the job does not argue with them.
+
+Resuming is a human writing `en_curso`. **Today that is done from PocketBase
+Admin**: the CRM screen where a campaign is reviewed and started is a separate
+feature for a later pass, and `inmobiliaria-crm` is deliberately untouched here.
+
+A `completada` campaign does not pick up a lead imported next month. That is
+deliberate: a campaign is a decision taken on a population at a point in time,
+not a standing rule. Sending to the newcomers is a new campaign.
+
+### Sending twice is the failure that matters
+
+Before every chassis call the recipient is appended to `informe.en_vuelo` and
+the campaign row is patched; the entry is removed once the send is resolved. If
+the patch itself fails, that recipient is skipped **without sending** — an
+unrecorded send is the one that gets doubled later. A surviving entry is
+resolved on the next run by **adoption**: if an `envios` row exists for that
+lead and template since then, it is adopted (its `campana` is patched) and
+counted as sent; if not, it moves to `informe.dudosos` and is **never retried**.
+A message that may have left is not sent again; the ambiguity is reported.
+
+Linking is two patches after the send — `envios.campana` and
+`actividades.campana` — and the activity id is read as
+`body.activity_id ?? body.actividad_id`, because `/send-email` and
+`/send-whatsapp` disagree on the name. A failed patch never makes a lead
+pending again: it goes to `informe.enlaces_fallidos` and the next run repairs
+it first.
+
+### What the chassis answers, and what it costs
+
+| answer | what the job does |
+|---|---|
+| `no_email`, `no_phone`, `no_consent`, `consent_revoked`, `template_not_approved`, `outside_window`, any other 4xx | terminal for that lead: `informe.excluidos`, and the campaign can complete |
+| `chassis_timeout`, `chassis_unreachable`, `provider_unavailable`, 5xx, 429, Twilio `63018` | retryable: stays pending, `informe.reintentos[lead]++`, given up as `agotado` at 3 |
+| `variables_missing` | terminal for the RUN: the same values are built for everybody, so one bug must not burn ten leads |
+| no answer at all | the entry stays in flight, the run **fails** so Alertas hears, and the next run adopts it or files it as `dudoso` |
+
+Only a chassis that never answered makes `run()` throw. Business refusals never
+do: three throws in one Madrid day open the runner's circuit and the campaign
+would stall until tomorrow.
+
+### Preconditions, and no fallbacks
+
+`ctx.env` carries the chassis credentials (`CHASSIS_URL`, `OUTBOUND_SECRET`,
+read from `~/.config/brotea/jobs-<slug>.env`, never printed). Missing them is
+`informe.bloqueo = { code: 'sin_chasis' }`, one Telegram line a day, and no
+state change — there is no fallback transport and no writing `simulado` rows
+and calling it a campaign. The same for a WhatsApp template Meta has not
+approved: it is checked **once**, before anything is sent, because asking per
+lead would burn the whole batch on `template_not_approved` one refusal at a
+time.
+
+The manager's WhatsApp report is checked as data and never faked: a `settings`
+row `campanas.gestor` naming a lead, that lead existing with a phone, and the
+`campana.informe` template being `approved`. Any one missing and **no call is
+made**, with the exact missing precondition recorded in
+`informe.informe_manager` and echoed in the Telegram line.
+
+### The catalog
+
+`pb/campanas.json` seeds two campaigns keyed by `nombre`
+(`node pb/campanas.mjs --slug inmobiliaria [--dry-run] [--force]`). `--force`
+only ever rewrites a row still in `borrador`: a running campaign has a report,
+a ledger and people in it, and a file must not be able to rewind that. The seed
+validates the catalog — including the segment, through the same contract the
+runner uses — before contacting the instance, and prints which seeded campaign
+is BLOCKED and why.
+
+One rule is worth naming: a `marketing` template may not be aimed at a segment
+of people who have not consented **unless** its `evento` is
+`campana.consentimiento`. The consent request is precisely the message that may
+go to someone who has not consented; everything else may not.
+
 ## Probar y dry-run
 
-- Tests unitarios: `npm test` (ejecuta `node --test jobs/*.test.mjs
-  src/locales/*.test.mjs` — los tests de jobs más el gate i18n del
-  escaparate, ver [docs/i18n.md](i18n.md) — y después el build de Astro;
-  CI corre exactamente eso).
+- Tests unitarios: `npm test` (ejecuta `node --test src/locales/*.test.mjs
+  scripts/*.test.mjs jobs/*.test.mjs pb/*.test.mjs` — el gate i18n del
+  escaparate, ver [docs/i18n.md](i18n.md), los tests de jobs y los de los
+  catálogos de `pb/` — y después `astro check` y el build; CI corre
+  exactamente eso).
+- Sembrar el catálogo de campañas: `node pb/campanas.mjs --slug inmobiliaria
+  --dry-run` primero (imprime qué crearía y no escribe), y sin `--dry-run`
+  cuando el listado cuadre. Solo reescribe filas en `borrador`.
 - Dry-run contra datos reales, sin enviar nada (desde la raíz de la fábrica):
   `node scripts/run-jobs.mjs --slug inmobiliaria --dry-run --force`
   Añade `--jobs-dir <ruta>/jobs` para probar el código de un worktree **antes**
   de mergearlo (en producción el runner solo lee `main`).
 - Qué toca ahora y por qué: `node scripts/run-jobs.mjs --list`.
-- Los jobs son stateless y re-ejecutables: no escriben en PocketBase. Cada
-  envío inserta su evento de plataforma — `lead.reminder_sent`
-  (`{count, oldest}`) la agenda, `project.daily_digest` (los contadores) el
-  resumen, `matcher.shortlist` (`{propiedad_id, candidates, lead_ids}`) el
-  matcher — **antes** de `notify()`: si un reintento repite el job, duplica
-  una fila inofensiva, no un mensaje de Telegram.
+- `agenda`, `resumen` y `matcher` son stateless y re-ejecutables: no escriben
+  en PocketBase. Cada envío inserta su evento de plataforma —
+  `lead.reminder_sent` (`{count, oldest}`) la agenda, `project.daily_digest`
+  (los contadores) el resumen, `matcher.shortlist`
+  (`{propiedad_id, candidates, lead_ids}`) el matcher — **antes** de
+  `notify()`: si un reintento repite el job, duplica una fila inofensiva, no
+  un mensaje de Telegram.
+- **`campanas` sí escribe en PocketBase**, y eso rompe la regla anterior a
+  propósito: sin estado no hay forma de saber a quién ya se le escribió. Todas
+  sus escrituras pasan por un único `escribir()` que `--dry-run` corta, y en un
+  ensayo tampoco llama al chasis: imprime lo que enviaría y no toca una fila.
+  `ctx.dryRun` **solo** neutraliza `event()` y `notify()`; `ctx.pb` es un
+  cliente superusuario de verdad, así que cualquier escritura nueva que no pase
+  por `escribir()` escribiría también en el ensayo.
 
 Para añadir o modificar un job, usa la skill `jobs`
 (`.claude/skills/jobs/SKILL.md`), que documenta el contrato del módulo.
