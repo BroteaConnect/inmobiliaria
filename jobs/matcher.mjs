@@ -1,15 +1,16 @@
 // matcher.mjs — 09:30 Madrid: for every published property, which open leads
-// fit it (town required; budget and rooms reorder). Every property gets its
+// fit it (zone required; budget and rooms reorder). Every property gets its
 // count in the log; only a property touched in the last 24 h with at least one
 // candidate sends a shortlist to Telegram, naming the agent who should call
 // (the lead's `asignado`, else the on-duty agent from settings
 // `agentes.guardia`). All the rules — text normalisation, what counts as a
-// town, an amount, a room count, the weights — live in lib.mjs with tests.
+// zone (town, master project, building; never a "-" or "N/A" cell), an
+// amount, a room count, the weights — live in lib.mjs with tests.
 //
 // The WhatsApp half ("¿te encaja? sí" → propiedad.encaja on the lead) is out
 // of scope until E5 ships its outbound template: a business-initiated message
 // needs a Twilio Content template or the lead's own 24-hour window.
-import { candidatos, esReciente, normalizarLeads, textoShortlist, vocabularioMunicipios } from './lib.mjs';
+import { candidatos, esReciente, normalizarLeads, textoShortlist, vocabularioZonas } from './lib.mjs';
 
 export const when = { daily: '09:30' };
 
@@ -37,17 +38,17 @@ async function nombreDeGuardia(pb, log) {
 }
 
 export async function run({ pb, notify, event, log, now }) {
-  // Every property builds the town vocabulary; only the published ones are scored.
+  // Every property builds the zone vocabulary; only the published ones are scored.
   const todas = await pb.collection('propiedades').getFullList({ sort: '-updated' });
-  const municipios = vocabularioMunicipios(todas);
+  const zonas = vocabularioZonas(todas);
   const publicadas = todas.filter((p) => p.estado === 'publicada');
   const leads = await pb.collection('leads').getFullList({
     filter: 'etapa != "vendido"',
     expand: 'propiedad,asignado',
   });
   const guardia = await nombreDeGuardia(pb, log);
-  const leadsNorm = normalizarLeads(leads, municipios);
-  log(`matcher: ${publicadas.length} published of ${todas.length} properties, ${leads.length} open lead(s), ${municipios.length} town(s), on-duty agent ${guardia ? 'resolved' : 'unknown'}`);
+  const leadsNorm = normalizarLeads(leads, zonas);
+  log(`matcher: ${publicadas.length} published of ${todas.length} properties, ${leads.length} open lead(s), ${zonas.length} zone(s), on-duty agent ${guardia ? 'resolved' : 'unknown'}`);
 
   let notified = 0;
   const failed = [];

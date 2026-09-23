@@ -6,6 +6,7 @@ import {
   diaMadrid, visitasDeHoy, textoVisitas, MAX_LINES, MAX_NOMBRE, ORIGEN_IMPORTADO,
   normalizarTexto, vocabularioMunicipios, extraerPrecioMax, extraerHabitaciones,
   normalizarCriterios, normalizarLeads, candidatos, esReciente, textoShortlist, PIE_CRM,
+  JUNK_ZONA, esZonaValida, zonasDePropiedad, vocabularioZonas, PESO_ZONA_TEXTO, PESO_ZONA_PISTA,
 } from './lib.mjs';
 
 // Fixed "now": 2026-07-30 09:00 Europe/Madrid (CEST, UTC+2) = 07:00Z.
@@ -538,6 +539,139 @@ describe('candidatos', () => {
   it('a 0 price (unset in PocketBase) fits every budget', () => {
     const out = cands([lead({ mensaje: 'jumeirah lakes towers, 100k' })], PROPIEDADES[2]);
     assert.equal(out[0].score, 5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Zones: a property's building and master project count as much as its town,
+// and a "-" / "N/A" cell counts for nothing. Vocabulary + scoring, end to end.
+//
+// TWIN FILE: the esZonaValida vector table below is the one pinned by
+// src/crm/import-mapping.test.mjs of BroteaConnect/inmobiliaria-crm (same
+// rules, minus the CRM's 80-char cap — see the last assertion).
+
+// A Dubai export the way the importer stored it before and after the junk
+// rule: junk master projects, a building in its own field, a legacy row whose
+// building lives only in the title.
+const DUBAI = [
+  { id: 'd1', titulo: 'Dubai Marina · Marina Gate 1 · unidad 1413', municipio: 'Dubai Marina', edificio: 'Marina Gate 1', precio: 0, habitaciones: 0, estado: 'publicada' },
+  { id: 'd2', titulo: 'Burj Vista 1 · unidad 2205', municipio: '-', edificio: 'Burj Vista 1', precio: 0, habitaciones: 0, estado: 'publicada' },
+  { id: 'd3', titulo: 'N/A · Burj Vista 1 · unidad 2205', municipio: 'N/A', precio: 0, habitaciones: 0, estado: 'borrador' },
+  { id: 'd4', titulo: 'Master Project · Seven City · unidad 302', municipio: 'Master Project', proyecto: 'Seven City', precio: 0, habitaciones: 0, estado: 'borrador' },
+  { id: 'd5', titulo: 'Loft', municipio: 'Madrid', precio: 289000, habitaciones: 2, estado: 'publicada' },
+];
+
+describe('esZonaValida', () => {
+  it('pins the vectors the twin file also pins', () => {
+    for (const v of ['Dubai Marina', 'Jumeirah Lakes Towers', 'Marsa Dubai']) {
+      assert.equal(esZonaValida(v), true, v);
+    }
+    const malas = ['', '-', '—', 'N/A', 'n/a', '0', '12', 'Master Project', 'master  project'];
+    for (const v of malas) assert.equal(esZonaValida(v), false, JSON.stringify(v));
+    for (const j of JUNK_ZONA) assert.equal(esZonaValida(j.toUpperCase()), false, j);
+    // The CRM rejects this one (its 80-char cap); the matcher has no cap —
+    // "cuts an unbounded municipio in the reasons" pins that a 500-char town
+    // still matches and is only cut in the message.
+    assert.equal(esZonaValida('x'.repeat(81)), true);
+    assert.equal(esZonaValida(null), false);
+  });
+});
+
+describe('zonasDePropiedad / vocabularioZonas', () => {
+  it('drops a junk municipio and keeps the building', () => {
+    assert.deepEqual(zonasDePropiedad({ municipio: '-', edificio: 'Marina Gate 1' }), ['marina gate 1']);
+  });
+
+  it('lists town, master project and building, normalised, in that order', () => {
+    const p = { municipio: 'Dubai Marina', proyecto: 'Marina Promenade', edificio: 'Marina Gate 1' };
+    assert.deepEqual(zonasDePropiedad(p), ['dubai marina', 'marina promenade', 'marina gate 1']);
+  });
+
+  it('reads a legacy title (no edificio field yet) minus its junk and its unit', () => {
+    assert.deepEqual(zonasDePropiedad(DUBAI[2]), ['burj vista 1']);
+  });
+
+  it('never reads a prose title as a zone', () => {
+    assert.deepEqual(zonasDePropiedad({ municipio: 'Madrid', titulo: 'Piso en Chamberí' }), ['madrid']);
+  });
+
+  it('ignores the title once the row carries an edificio', () => {
+    const p = { municipio: '-', edificio: 'Burj Vista 1', titulo: 'Old Town · Burj Vista 1 · unidad 2205' };
+    assert.deepEqual(zonasDePropiedad(p), ['burj vista 1']);
+  });
+
+  it('a row that names no zone yields none; a missing row too', () => {
+    assert.deepEqual(zonasDePropiedad({ municipio: 'N/A', titulo: '-' }), []);
+    assert.deepEqual(zonasDePropiedad(undefined), []);
+  });
+
+  it('builds the vocabulary from every property and never contains junk', () => {
+    const zonas = vocabularioZonas(DUBAI);
+    assert.deepEqual(zonas, ['dubai marina', 'marina gate 1', 'burj vista 1', 'seven city', 'madrid']);
+    for (const junk of ['-', 'n/a', 'master project', '']) assert.ok(!zonas.includes(junk), junk);
+    // the old vocabulary is untouched: the same junk still leaks there
+    assert.ok(vocabularioMunicipios(DUBAI).includes('master project'));
+  });
+});
+
+describe('candidatos por zona (edificio y master project)', () => {
+  const ZONAS = vocabularioZonas(DUBAI);
+  const cands = (leads, prop) => candidatos(prop, normalizarLeads(leads, ZONAS));
+
+  it('reads the junk-titled historical criterios: the building as zona_texto, the price', () => {
+    const n = normalizarCriterios(lead({ criterios: 'Compró en - · Marina Gate 1 · unidad 1413 · ~1,200,000' }), ZONAS);
+    assert.deepEqual(n.zona_texto, ['marina gate 1']);
+    assert.deepEqual(n.zona, ['marina gate 1']);
+    assert.equal(n.precio_max, 1200000);
+  });
+
+  it('a lead who bought in the building is a candidate for a junk-municipio property', () => {
+    const l = lead({ criterios: 'Compró en - · Marina Gate 1 · unidad 1413 · ~1,200,000' });
+    const out = cands([l], { municipio: '-', edificio: 'Marina Gate 1', precio: 0 });
+    assert.equal(out.length, 1);
+    assert.equal(out[0].score, 5);
+    assert.equal(out[0].motivos[0], 'zona marina gate 1');
+  });
+
+  it('a lead naming only the master project still scores the written weight', () => {
+    const l = lead({ criterios: 'Compró en Dubai Marina · ~900,000' });
+    const [c] = cands([l], DUBAI[0]);
+    assert.equal(c.motivos[0], 'zona dubai marina');
+    assert.equal(c.score, PESO_ZONA_TEXTO + 2);
+  });
+
+  it('"Marina Gate 2" is not "Marina Gate 1"', () => {
+    const l = lead({ criterios: 'Compró en Dubai Marina · Marina Gate 2 · unidad 800' });
+    const zonas = vocabularioZonas([{ municipio: '-', edificio: 'Marina Gate 1' }]);
+    assert.deepEqual(candidatos({ municipio: '-', edificio: 'Marina Gate 1' }, normalizarLeads([l], zonas)), []);
+  });
+
+  it('two junk-municipio properties share no candidate through the junk', () => {
+    const props = [
+      { id: 'j1', titulo: 'Piso A', municipio: '-', precio: 0 },
+      { id: 'j2', titulo: 'Piso B', municipio: '-', precio: 0 },
+    ];
+    const zonas = vocabularioZonas(props);
+    const l = lead({ criterios: 'Compró en - · unidad 12 · ~500,000', mensaje: 'zona -' });
+    for (const p of props) assert.deepEqual(candidatos(p, normalizarLeads([l], zonas)), []);
+  });
+
+  it('the linked property hints its building, scored as a hint', () => {
+    const prop = { id: 'd2', titulo: 'Burj Vista 1 · unidad 2205', municipio: '-', edificio: 'Burj Vista 1', precio: 0 };
+    const l = lead({ mensaje: 'me interesa', expand: { propiedad: prop } });
+    const [c] = cands([l], prop);
+    assert.equal(c.score, PESO_ZONA_PISTA + 2);
+    assert.equal(c.motivos[0], 'zona burj vista 1 (por la propiedad que consultó)');
+  });
+
+  it('the shortlist header names the building when the municipio is junk', () => {
+    const prop = DUBAI[1];
+    const l = lead({ nombre: 'Omar', criterios: 'Compró en - · Burj Vista 1 · unidad 2205' });
+    const txt = textoShortlist(prop, cands([l], prop), null, NOW);
+    assert.match(txt, /· Burj Vista 1 · unidad 2205 \(Burj Vista 1\) · 1 candidato:/);
+    const gate = { ...prop, titulo: 'Marina Gate 1 · unidad 1413', edificio: 'Marina Gate 1' };
+    const l2 = lead({ nombre: 'Omar', criterios: 'Compró en - · Marina Gate 1 · unidad 1413' });
+    assert.match(textoShortlist(gate, cands([l2], gate), null, NOW), /\(Marina Gate 1\)/);
   });
 });
 
