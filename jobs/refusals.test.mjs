@@ -128,9 +128,18 @@ test('the chassis answers of 2199027 land in their buckets', () => {
   assert.equal(at(502, structured('ledger_unavailable')).bucket, 'infra');
   // A lead with no email is a channel fact, never a consent write.
   assert.deepEqual([at(400, structured('no_email')).bucket, at(400, structured('no_email')).scope], ['lead', 'channel']);
-  // An HTML gateway page is named from its status and retried.
+  // A gateway page after the chassis died mid-request may follow a send: the
+  // ledger decides next tick. A bodiless proxy 503 comes before the app: infra.
   assert.equal(at(502, null).code, 'http_502');
-  assert.equal(at(502, null).bucket, 'infra');
+  assert.equal(at(502, '<html>Bad Gateway</html>').bucket, 'ambiguous');
+  assert.equal(at(500, null).bucket, 'ambiguous');
+  assert.equal(at(503, null).bucket, 'infra');
+  // A 2xx that is not the chassis's ok:true (or could not be read) may be a send.
+  for (const status of [200, 201, 202, 204]) assert.equal(at(status, null).bucket, 'ambiguous', String(status));
+  assert.equal(at(200, { ok: false }).bucket, 'ambiguous');
+  // A refused connection or an unresolvable host proves nothing left.
+  assert.equal(classifyRefusal({ code: 'chassis_refused_connection' }).bucket, 'infra');
+  assert.equal(classifyRefusal({ code: 'chassis_host_not_found' }).bucket, 'infra');
 });
 
 test('a string error never reaches the classifier as a code', () => {

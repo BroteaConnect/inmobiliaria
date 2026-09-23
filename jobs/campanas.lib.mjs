@@ -8,7 +8,8 @@
 //   pending (run/infra fault) | uncertain (the message may have left)
 // and an uncertain one is settled against the `envios` ledger on a later tick:
 // sent, back to pending, or doubtful (never retried, never excluded).
-// Terminal: sent, excluded, doubtful.
+// Terminal: sent, excluded, doubtful. `deferred` (a provider number code
+// before anything was sent) is retried after every pending recipient.
 import { classifyRefusal, mayExcludeLead } from './refusals.lib.mjs';
 import { diaMadrid, horaMadrid, parseFecha } from './lib.mjs';
 
@@ -20,6 +21,8 @@ export const CU15 = /cu-15/i;
 export const INFORME_VERSION = 1;
 export const MAX_PER_TICK = 10;
 export const INFRA_STREAK_PAUSE = 3;
+export const GUARDED_STREAK_PAUSE = 3;
+export const CHASSIS_TIMEOUT_MS = 30_000;
 export const DOUBTFUL_AFTER_MS = 24 * 3_600_000;
 export const CONSENT_TEMPLATE = 'consentimiento.solicitud';
 export const PROJECT_ID = 14; // projects.id of inmobiliaria, for lead.consent_requested
@@ -42,7 +45,7 @@ export const COPY = {
   nothing_sent: 'Todos los destinatarios terminaron y no se envió nada.', // lang-sweep: allow
   ledger_empty: 'El registro de envíos no muestra ningún envío de esta campaña.', // lang-sweep: allow
   infra_streak: 'Tres pasadas seguidas con fallo de infraestructura.', // lang-sweep: allow
-  guarded_flood: 'Rechazo de número antes de ningún envío: se trata como fallo nuestro.', // lang-sweep: allow
+  guarded_flood: 'Tres rechazos de número seguidos sin ningún envío: se trata como fallo nuestro.', // lang-sweep: allow
   paused: (name, code, reason) => `⏸ <b>Campaña en pausa</b> — ${name}\nMotivo: <code>${code}</code> ${reason}\nSe reanuda a mano (estado en_curso) cuando esté resuelto.`, // lang-sweep: allow
   completed: (name, s) => `✅ <b>Campaña completada</b> — ${name}\nAlcanzados: ${s.alcanzados} · excluidos: ${s.excluidos} · dudosos: ${s.dudosos}`, // lang-sweep: allow
 };
@@ -129,7 +132,20 @@ export function quota(row, informe, now) {
 
 // -- informe ------------------------------------------------------------------
 /** An informe with no recipients yet: what a campaign paused before its segment was frozen carries. */
-export const emptyInforme = () => ({ v: INFORME_VERSION, alcanzados: 0, intentados_ids: [], excluidos: [], revision_humana: [], infra_streak: 0 });
+export const emptyInforme = () => ({ v: INFORME_VERSION, alcanzados: 0, intentados_ids: [], excluidos: [], revision_humana: [], infra_streak: 0, guarded_streak: 0 });
+
+/** The informe a pause writes: the reason, no lease, and fresh streaks so a human resume gets three new chances. */
+export function pausedInforme(informe, code, reason, now) {
+  const next = { ...clone(informe ?? emptyInforme()), pausa: { code, reason, at: now.toISOString() }, infra_streak: 0, guarded_streak: 0 };
+  delete next.lease;
+  return next;
+}
+
+/** Who this tick may send to, in order: every pending recipient, then the deferred ones. */
+export const sendQueue = (informe, n) => {
+  const inState = (s) => Object.entries(informe.recipients).filter(([, r]) => r.state === s).map(([id]) => id);
+  return [...inState('pending'), ...inState('deferred')].slice(0, n);
+};
 
 export function freeze(ids) {
   return { ...emptyInforme(), recipients: Object.fromEntries(ids.map((id) => [id, { state: 'pending' }])) };
@@ -172,6 +188,7 @@ export function applyOutcome(informe, leadId, outcome, now) {
   if (outcome.sent) {
     next.recipients[leadId] = { state: 'sent', at: r.at ?? now.toISOString(), ...(outcome.envio_id ? { envio_id: outcome.envio_id } : {}) };
     next.infra_streak = 0;
+    next.guarded_streak = 0;
     return { informe: next, action: 'continue' };
   }
   if (outcome.state) {
@@ -187,9 +204,18 @@ export function applyOutcome(informe, leadId, outcome, now) {
     next.recipients[leadId] = { ...r, state: 'uncertain', code: v.code };
     return { informe: next, action: 'stop', verdict: v };
   }
-  next.recipients[leadId] = { state: 'pending' };
   next.ultimo_fallo = { code: v.code, reason: v.reason, at: now.toISOString() };
-  if (v.bucket === 'lead') return { informe: next, action: 'pause', verdict: { ...v, reason: COPY.guarded_flood } };
+  if (v.bucket === 'lead') {
+    // A provider number code before anything was sent may be OUR sender's
+    // fault: the lead is deferred behind every pending one, and only a run of
+    // them with nothing sent pauses the campaign.
+    next.recipients[leadId] = { state: 'deferred', code: v.code };
+    next.guarded_streak = (next.guarded_streak ?? 0) + 1;
+    return next.guarded_streak >= GUARDED_STREAK_PAUSE
+      ? { informe: next, action: 'pause', verdict: { ...v, reason: COPY.guarded_flood } }
+      : { informe: next, action: 'continue', verdict: v };
+  }
+  next.recipients[leadId] = { state: 'pending' };
   if (v.bucket === 'run') return { informe: next, action: 'pause', verdict: v };
   next.infra_streak = (next.infra_streak ?? 0) + 1;
   const action = next.infra_streak >= INFRA_STREAK_PAUSE ? 'pause' : 'stop';
@@ -198,13 +224,20 @@ export function applyOutcome(informe, leadId, outcome, now) {
 
 /**
  * What the ledger says about one uncertain recipient. `rows` are the envios of
- * this campaign for this lead. WhatsApp writes its row BEFORE the provider
- * call, so no row is a proven non-send; email writes it AFTER the SMTP send,
- * so no row proves nothing and the recipient is doubtful.
+ * this campaign for this lead.
+ *   email     the row is written only AFTER sendMail resolved, and Brevo later
+ *             turns it into `error` (hard_bounce, blocked…): any row means it
+ *             left, and no row proves nothing — doubtful either way unless sent.
+ *   whatsapp  the row is written BEFORE the provider call: no row, once the
+ *             chassis cannot still be mid-request, is a proven non-send.
  */
 export function reconcile(recipient, rows, canal, now) {
   if (rows.some((e) => SENT_ESTADOS.includes(e.estado))) return { sent: true };
-  if (!rows.length) return { state: canal === 'whatsapp' ? 'pending' : 'doubtful' };
+  if (canal !== 'whatsapp') return { state: 'doubtful' };
+  if (!rows.length) {
+    const age = now - new Date(recipient.at ?? 0);
+    return { state: age > 2 * CHASSIS_TIMEOUT_MS ? 'pending' : 'uncertain' };
+  }
   if (rows.some((e) => e.estado === 'registrado')) {
     const age = now - new Date(recipient.at ?? 0);
     return { state: age >= DOUBTFUL_AFTER_MS ? 'doubtful' : 'uncertain' };
@@ -278,4 +311,19 @@ export function catalogProblems(rows) {
     }
   }
   return out;
+}
+
+/**
+ * What the seed does with each catalog row, given every row on the instance:
+ * `keep` when that nombre exists (never patched), `refuse` for a CU-15 row
+ * while ANY existing row carries the marker (a second CU-15 would make the
+ * gate's identifier ambiguous), `create` otherwise.
+ */
+export function seedPlan(rows, existing) {
+  const names = new Set(existing.map((c) => c.nombre));
+  const cu15Exists = existing.some((c) => CU15.test(String(c.nombre ?? '')));
+  return rows.map((row) => ({
+    row,
+    action: names.has(row.nombre) ? 'keep' : CU15.test(row.nombre) && cu15Exists ? 'refuse' : 'create',
+  }));
 }

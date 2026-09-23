@@ -173,13 +173,17 @@ that template is E5's deliverable, and the matcher will call it from there.
   at most `min(10, lote_diario left today, intervalo_min credits)` per tick.
 - **Refusals.** Every chassis answer is classified by `refusals.lib.mjs`.
   Only a *recognised* per-lead code (STOP, no consent, no phone/email…)
-  excludes a lead, from this campaign only, and a provider number code before
-  anything was sent is treated as our fault. A code about the run (auth,
+  excludes a lead, from this campaign only. A provider number code before
+  anything was sent may be our sender's fault: that lead is `deferred` behind
+  every pending one, and three in a row with nothing sent pause the campaign
+  (a resume starts the count again). A code about the run (auth,
   config, template) pauses. **Anything unrecognised is infrastructure**: the
   lead goes back to pending, and three such ticks in a row pause. An answer
-  after which the message may have left (email 502/500, timeouts,
-  `provider_unavailable`) is never retried: it is settled against `envios`
-  on a later tick, or marked doubtful for a human.
+  after which the message may have left (email 502/500, a proxy 500/502/504
+  page, an unreadable 2xx, timeouts, `provider_unavailable`) is never
+  retried: it is settled against `envios` on a later tick, or marked doubtful
+  for a human. For email any ledger row means it left (a later bounce is
+  doubtful, never retried); only WhatsApp error rows are classified by code.
 - **Report.** `informe` v1 (`alcanzados` = distinct leads with an `envios`
   row in enviado/entregado/abierto/click, `intentados_ids`, `excluidos`,
   `revision_humana`, `completada_en`) is what the E5 gate recomputes.

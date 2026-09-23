@@ -138,6 +138,10 @@ export const INFRA_TABLE = {
   63049: 'WhatsApp está limitando los envíos a este destinatario: se reintenta más tarde.', // lang-sweep: allow
   20429: 'Demasiadas peticiones a Twilio: se reintenta más tarde.', // lang-sweep: allow
   ledger_unavailable: 'El chasis no pudo escribir su registro: el mensaje no llegó a salir.', // lang-sweep: allow
+  // The connection itself was refused or the host did not resolve: no request
+  // reached the chassis, so nothing can have left.
+  chassis_refused_connection: 'El chasis rechazó la conexión: el mensaje no salió.', // lang-sweep: allow
+  chassis_host_not_found: 'No se encontró el host del chasis: el mensaje no salió.', // lang-sweep: allow
   auth_unavailable: 'No se pudo comprobar la credencial contra PocketBase.', // lang-sweep: allow
   429: 'Demasiadas peticiones: se reintenta más tarde.', // lang-sweep: allow
   http_429: 'Demasiadas peticiones: se reintenta más tarde.', // lang-sweep: allow
@@ -157,6 +161,18 @@ export const AMBIGUOUS_TABLE = {
   chassis_502: 'El chasis falló después de intentar el envío: puede haber salido.', // lang-sweep: allow
   chassis_500: 'Error interno del chasis durante el envío: puede haber salido.', // lang-sweep: allow
   http_504: 'Una pasarela dejó de esperar al chasis: el mensaje puede haber salido.', // lang-sweep: allow
+  // A 5xx page from the proxy (Traefik) when the chassis died mid-request: the
+  // send may have happened before it died. A proxy 503 with no body is
+  // answered before the app is reached, so http_503 stays unknown (infra).
+  http_500: 'Error 500 sin respuesta del chasis: el mensaje puede haber salido.', // lang-sweep: allow
+  http_502: 'La pasarela perdió al chasis a mitad de la petición: puede haber salido.', // lang-sweep: allow
+  // A success status whose body is not the chassis's `ok: true` (or could not
+  // be read at all): something answered 2xx, so the send may have happened.
+  http_200: 'Respuesta 200 ilegible: el mensaje puede haber salido.', // lang-sweep: allow
+  http_201: 'Respuesta 201 ilegible: el mensaje puede haber salido.', // lang-sweep: allow
+  http_202: 'Respuesta 202 ilegible: el mensaje puede haber salido.', // lang-sweep: allow
+  http_204: 'Respuesta 204 sin cuerpo: el mensaje puede haber salido.', // lang-sweep: allow
+  chassis_200: 'El chasis respondió 200 sin confirmar el envío: puede haber salido.', // lang-sweep: allow
 };
 
 /** The reason given to a code no table knows. It is retried, never charged to anybody. */

@@ -15,15 +15,14 @@
 //     that stopped working must never look like a job with nothing to do.
 //   · OUTBOUND_SECRET never reaches a log, an event or an error (scrub()).
 import {
-  ACTIVE_ESTADOS, CONSENT_TEMPLATE, COPY, CU15, PROJECT_ID, SENT_ESTADOS, TEST_LEAD_IDS,
-  applyOutcome, claim, closeDecision, emptyInforme, escapeHtml, freeze, guard, insideHours, matches, parseSegment,
-  quota, reachedFromLedger, reconcile, render, resolveVariables, settleClaims, started,
+  ACTIVE_ESTADOS, CHASSIS_TIMEOUT_MS, CONSENT_TEMPLATE, COPY, CU15, PROJECT_ID, SENT_ESTADOS, TEST_LEAD_IDS,
+  applyOutcome, claim, closeDecision, escapeHtml, freeze, guard, insideHours, matches, parseSegment,
+  pausedInforme, quota, reachedFromLedger, reconcile, render, resolveVariables, sendQueue, settleClaims, started,
 } from './campanas.lib.mjs';
 import { answerCode, classifyRefusal } from './refusals.lib.mjs';
 
 export const when = { hourly: true };
 
-const TIMEOUT_MS = 30_000;
 const LEASE_MS = 10 * 60_000;
 const RECORD_ID = /^[a-z0-9]+$/;
 
@@ -39,9 +38,13 @@ async function callChassis(env, canal, payload, fetchImpl) {
   try {
     res = await fetchImpl(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload), signal: AbortSignal.timeout(TIMEOUT_MS),
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(CHASSIS_TIMEOUT_MS),
     });
   } catch (e) {
+    // No connection at all proves nothing left: infra, retried. Anything else
+    // (a timeout, a reset mid-request) may have followed a send.
+    const refused = { ECONNREFUSED: 'chassis_refused_connection', ENOTFOUND: 'chassis_host_not_found' }[e?.cause?.code];
+    if (refused) return { verdict: classifyRefusal({ code: refused }) };
     const timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError';
     return { verdict: classifyRefusal({ code: timedOut ? 'chassis_timeout' : 'chassis_unreachable', answered: false }) };
   }
@@ -94,8 +97,7 @@ async function tick(ctx, row, cu15Row) {
   };
   const refuse = (g) => { throw new Error(`guard ${g.code}: ${g.reason}`); };
   const pause = async (code, reason, inf) => {
-    const informe = { ...(inf ?? emptyInforme()), pausa: { code, reason, at: now.toISOString() } };
-    delete informe.lease;
+    const informe = pausedInforme(inf, code, reason, now);
     await write({ estado: 'pausada', informe });
     await ctx.event('campana.pausada', { campana_id: row.id, code });
     await ctx.notify(COPY.paused(escapeHtml(row.nombre), escapeHtml(code), escapeHtml(reason)));
@@ -137,9 +139,11 @@ async function tick(ctx, row, cu15Row) {
   if (!hours) return 'outside sending hours';
 
   // 4. Freeze and lease: one run at a time works on one campaign.
-  if (informe?.lease && new Date(informe.lease.until) > now) return `leased until ${informe.lease.until}`;
+  // The lease is wall-clock time (Date.now), never ctx.now: two runs started
+  // at different moments must agree on when it expires.
+  if (informe?.lease && new Date(informe.lease.until).getTime() > Date.now()) return `leased until ${informe.lease.until}`;
   const runId = `${now.toISOString()}-${Math.random().toString(36).slice(2, 8)}`;
-  informe = { ...settleClaims(informe ?? freeze(ids)), lease: { run: runId, until: new Date(now.getTime() + LEASE_MS).toISOString() } };
+  informe = { ...settleClaims(informe ?? freeze(ids)), lease: { run: runId, until: new Date(Date.now() + LEASE_MS).toISOString() } };
   await write({ estado: 'en_curso', informe });
   if (!dryRun && (await pb.collection('campanas').getOne(row.id)).informe?.lease?.run !== runId) return 'lost the lease';
   const release = async () => { delete informe.lease; await write({ informe }); };
@@ -158,7 +162,7 @@ async function tick(ctx, row, cu15Row) {
 
   // 6. The batch.
   const n = quota(row, informe, now);
-  const queue = Object.entries(informe.recipients).filter(([, r]) => r.state === 'pending').map(([id]) => id).slice(0, n);
+  const queue = sendQueue(informe, n);
   let sent = 0;
   let halt = null;
   for (const id of queue) {

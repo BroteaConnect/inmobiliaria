@@ -3,9 +3,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  INFRA_STREAK_PAUSE, MAX_PER_TICK, SENT_ESTADOS, TEST_LEAD_IDS, applyOutcome, catalogProblems, claim,
-  closeDecision, excludeLead, freeze, guard, insideHours, matches, parseSegment, quota, reachedFromLedger,
-  reconcile, resolveVariables, settleClaims, started,
+  GUARDED_STREAK_PAUSE, INFRA_STREAK_PAUSE, MAX_PER_TICK, SENT_ESTADOS, TEST_LEAD_IDS, applyOutcome, catalogProblems,
+  claim, closeDecision, excludeLead, freeze, guard, insideHours, matches, parseSegment, pausedInforme, quota,
+  reachedFromLedger, reconcile, resolveVariables, seedPlan, sendQueue, settleClaims, started,
 } from './campanas.lib.mjs';
 import { classifyRefusal } from './refusals.lib.mjs';
 
@@ -97,10 +97,27 @@ describe('outcomes: an unknown refusal is infrastructure, never a person', () =>
     const s = applyOutcome({ ...claim(freeze(['a']), 'a', NOW), infra_streak: 2 }, 'a', { sent: true, envio_id: null }, NOW);
     assert.deepEqual([s.informe.recipients.a.state, s.informe.infra_streak], ['sent', 0]);
   });
-  it('a guarded lead code before anything was sent is our fault: pause, no exclusion', () => {
-    const r = applyOutcome(claim(freeze(['a', 'b']), 'a', NOW), 'a', verdict('21211', 502), NOW);
-    assert.deepEqual([r.action, r.informe.excluidos.length], ['pause', 0]);
-    const inf = applyOutcome(claim(freeze(['a', 'b']), 'b', NOW), 'b', { sent: true }, NOW).informe;
+  it('a guarded lead code before anything was sent defers that lead; only a run of them pauses', () => {
+    let inf = freeze(['a', 'b', 'c', 'd']);
+    const actions = [];
+    for (const id of ['a', 'b', 'c']) {
+      const r = applyOutcome(claim(inf, id, NOW), id, verdict('21211', 502), NOW);
+      actions.push(r.action);
+      inf = r.informe;
+    }
+    assert.equal(GUARDED_STREAK_PAUSE, 3);
+    assert.deepEqual(actions, ['continue', 'continue', 'pause']);
+    assert.deepEqual([inf.recipients.a.state, inf.excluidos.length], ['deferred', 0]);
+    assert.deepEqual(sendQueue(inf, 10), ['d', 'a', 'b', 'c']); // deferred go after every pending
+    assert.equal(closeDecision(inf), 'open');
+    // A human resume gets fresh streaks and does not pause on the same lead again.
+    const resumed = pausedInforme(inf, '21211', 'x', NOW);
+    assert.deepEqual([resumed.guarded_streak, resumed.infra_streak, resumed.lease], [0, 0, undefined]);
+  });
+  it('once something was sent, a deferred lead retried on the same code is excluded by the normal rule', () => {
+    let inf = applyOutcome(claim(freeze(['a', 'b']), 'a', NOW), 'a', verdict('21211', 502), NOW).informe;
+    inf = applyOutcome(claim(inf, 'b', NOW), 'b', { sent: true }, NOW).informe;
+    assert.equal(inf.guarded_streak, 0);
     const e = applyOutcome(claim(inf, 'a', NOW), 'a', verdict('21211', 502), NOW);
     assert.deepEqual([e.action, e.informe.recipients.a.state, e.informe.excluidos[0].code], ['continue', 'excluded', '21211']);
   });
@@ -122,9 +139,17 @@ describe('outcomes: an unknown refusal is infrastructure, never a person', () =>
 
 describe('reconciliation against the ledger', () => {
   const r = { state: 'uncertain', at: hoursAgo(1) };
-  it('no row: WhatsApp never reached the provider, email proves nothing', () => {
+  it('no row: WhatsApp never reached the provider (once it cannot be mid-request), email proves nothing', () => {
     assert.deepEqual(reconcile(r, [], 'whatsapp', NOW), { state: 'pending' });
+    assert.deepEqual(reconcile({ state: 'uncertain', at: new Date(NOW - 30_000).toISOString() }, [], 'whatsapp', NOW), { state: 'uncertain' });
     assert.deepEqual(reconcile(r, [], 'email', NOW), { state: 'doubtful' });
+  });
+  it('email: any row means it left — a bounce is doubtful, never pending, never classified', () => {
+    for (const error_codigo of ['hard_bounce', 'soft_bounce', 'blocked', 'spam', 'invalid_email', '21211', 'nunca_visto']) {
+      assert.deepEqual(reconcile(r, [{ estado: 'error', error_codigo }], 'email', NOW), { state: 'doubtful' }, error_codigo);
+    }
+    assert.deepEqual(reconcile(r, [{ estado: 'registrado' }], 'email', NOW), { state: 'doubtful' });
+    assert.deepEqual(reconcile(r, [{ estado: 'error' }, { estado: 'entregado' }], 'email', NOW), { sent: true });
   });
   it('registrado stays uncertain for 24 h, then doubtful; a sent row is sent', () => {
     assert.deepEqual(reconcile(r, [{ estado: 'registrado' }], 'whatsapp', NOW), { state: 'uncertain' });
@@ -172,6 +197,18 @@ describe('variables', () => {
     assert.deepEqual(resolveVariables(p, { 'negocio.razonSocial': { v: 1, text: '  ' } }).missing, ['agencia']);
     assert.deepEqual(resolveVariables(p, { 'negocio.razonSocial': { v: 1, text: 'Agencia X' } }), { values: { agencia: 'Agencia X' }, missing: [] });
     assert.deepEqual(resolveVariables({ variables: ['nombre', 'url'] }, {}).missing, ['url']);
+  });
+});
+
+describe('seed plan', () => {
+  const cat = [{ nombre: 'Consentimiento CU-15' }, { nombre: 'Ensayo' }];
+  it('creates what is missing, keeps what exists by nombre, never patches', () => {
+    assert.deepEqual(seedPlan(cat, []).map((p) => p.action), ['create', 'create']);
+    assert.deepEqual(seedPlan(cat, [{ nombre: 'Ensayo' }, { nombre: 'Consentimiento CU-15' }]).map((p) => p.action), ['keep', 'keep']);
+  });
+  it('refuses to create a CU-15 while ANY existing row carries the marker', () => {
+    const plan = seedPlan(cat, [{ nombre: 'cu-15 renombrada a mano' }]);
+    assert.deepEqual(plan.map((p) => p.action), ['refuse', 'create']);
   });
 });
 

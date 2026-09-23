@@ -197,6 +197,38 @@ describe('the inversion: refusals about the run never cost a person', () => {
     await h.tick();
     assert.deepEqual([states(w), h.calls.length], [['doubtful'], 1]);
   });
+  it('a gateway 502 page may follow a send: uncertain, not re-sent; a refused connection is infra', async () => {
+    const w = world({ campanas: [campaign()] });
+    const h = harness(w, { answers: [{ status: 502, body: '<html>Bad Gateway</html>' }] });
+    assert.match(String((await h.tick()).message), /stopped on ambiguous http_502/);
+    assert.deepEqual(states(w), ['uncertain']);
+    const refused = Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    const w2 = world({ campanas: [campaign()] });
+    const h2 = harness(w2, { answers: [refused] });
+    assert.match(String((await h2.tick()).message), /stopped on infra chassis_refused_connection/);
+    assert.deepEqual(states(w2), ['pending']);
+  });
+  it('a lead refused by number before any send is deferred, then excluded once someone was reached', async () => {
+    const two = REAL.slice(0, 2);
+    const w = world({ campanas: [campaign({ segmento: { v: 1, ids: two } }), { id: 'cu1500000000001', nombre: 'CU-15', estado: 'completada' }] });
+    const bad = { status: 502, body: { ok: false, error: { code: '21211' } } };
+    const h = harness(w, { env: READY, answers: [bad, { status: 200, body: { ok: true } }, bad], ledger: true });
+    await h.tick();
+    assert.deepEqual(states(w), ['deferred', 'sent']);
+    assert.equal(w.db.campanas[0].estado, 'en_curso');
+    await h.tick();
+    assert.deepEqual(states(w), ['excluded', 'sent']);
+    assert.deepEqual([w.db.campanas[0].estado, h.calls.map((c) => c.body.lead_id)], ['completada', [two[0], two[1], two[0]]]);
+  });
+  it('the lease is wall-clock time, not ctx.now', async () => {
+    const informe = (until) => ({ v: 1, alcanzados: 0, intentados_ids: [], excluidos: [], revision_humana: [], infra_streak: 0, lease: { run: 'x', until }, recipients: { [T]: { state: 'pending' } } });
+    const stale = world({ campanas: [campaign({ estado: 'en_curso', informe: informe(new Date(NOW.getTime() + 60_000).toISOString()) })] });
+    await harness(stale, { ledger: true }).tick();
+    assert.equal(stale.db.campanas[0].estado, 'completada');
+    const live = world({ campanas: [campaign({ estado: 'en_curso', informe: informe(new Date(Date.now() + 60_000).toISOString()) })] });
+    assert.match(String(await harness(live).tick()), /leased until/);
+    assert.equal(live.writes.length, 0);
+  });
   it('a claimed recipient found at tick start is not re-sent', async () => {
     const w = world({ campanas: [campaign({ estado: 'en_curso', informe: { v: 1, alcanzados: 0, intentados_ids: [T], excluidos: [], revision_humana: [], infra_streak: 0, recipients: { [T]: { state: 'claimed', at: NOW.toISOString() } } } })] });
     const h = harness(w);
