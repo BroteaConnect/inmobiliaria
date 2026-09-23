@@ -7,8 +7,8 @@
       "type": "auth",
       "fields": [],
       "rules": {
-        "list": "id = @request.auth.id",
-        "view": "id = @request.auth.id",
+        "list": "@request.auth.id != \"\"",
+        "view": "@request.auth.id != \"\"",
         "create": null,
         "update": null,
         "delete": null
