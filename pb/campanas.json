@@ -1,0 +1,22 @@
+[
+  {
+    "nombre": "Consentimiento CU-15",
+    "plantilla": "consentimiento.solicitud",
+    "segmento": { "v": 1, "origen": ["histórico"] },
+    "lote_diario": 30,
+    "intervalo_min": 15,
+    "hora_desde": "10:00",
+    "hora_hasta": "19:00",
+    "estado": "borrador"
+  },
+  {
+    "nombre": "Ensayo de campaña: email al lead de prueba",
+    "plantilla": "consentimiento.baja.email",
+    "segmento": { "v": 1, "ids": ["1dlh5ldb9rlwpra"] },
+    "lote_diario": 1,
+    "intervalo_min": 0,
+    "hora_desde": "09:00",
+    "hora_hasta": "20:00",
+    "estado": "programada"
+  }
+]
