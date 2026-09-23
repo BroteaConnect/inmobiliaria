@@ -105,6 +105,53 @@ export function textoAgenda(stale, now) {
   ].join('\n');
 }
 
+// Visits scheduled for the Madrid-local day of `now` — a 23:30Z visit on the
+// 29th is a 01:30 visit on the 30th in Madrid, and diaMadrid() is what decides
+// that, never a fixed offset. Cancelled visits are not visits; a visit with an
+// unusable `cuando` is on no day at all. Earliest first: the agent reads it
+// top to bottom before leaving the office.
+export function visitasDeHoy(visitas, now) {
+  const hoy = diaMadrid(now);
+  return visitas
+    .filter((v) => v.resultado !== 'cancelada')
+    .filter((v) => diaMadrid(v.cuando) === hoy)
+    .sort((a, b) => parseFecha(a.cuando) - parseFecha(b.cuando));
+}
+
+const madridHour = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+export const horaMadrid = (date) => {
+  const d = parseFecha(date);
+  return esFecha(d) ? madridHour.format(d) : '--:--';
+};
+
+// The visits section of the 09:00 agenda (HTML): one line per visit,
+// `HH:MM · <b>lead</b> · property · agent`, read from the expanded relations
+// (`expand=lead,propiedad,agente`). A relation that did not expand — a lead
+// deleted since, a visit saved without a property — degrades to a Spanish
+// placeholder, never to "undefined". Every name is cut to MAX_NOMBRE before
+// escaping: propiedades.titulo has no max, and ten long titles would push the
+// digest past Telegram's 4096 chars after the event row is already written.
+// Returns null when there are no visits.
+const recorta = (s) => escapeHtml(String(s).slice(0, MAX_NOMBRE));
+export function textoVisitas(visitas, now) {
+  if (!visitas.length) return null;
+  const lines = visitas.slice(0, MAX_LINES).map((v) => {
+    const lead = recorta(v.expand?.lead?.nombre || 'lead sin nombre');
+    const propiedad = recorta(v.expand?.propiedad?.titulo || 'sin propiedad');
+    const agente = recorta(v.expand?.agente?.name || 'sin agente');
+    return `• ${horaMadrid(v.cuando)} · <b>${lead}</b> · ${propiedad} · ${agente}`;
+  });
+  if (visitas.length > MAX_LINES) lines.push(`… y ${visitas.length - MAX_LINES} más`);
+  const n = visitas.length;
+  return [
+    `🗓 <b>Visitas de hoy</b> — ${madridHeader.format(now)} · ${n} ${n === 1 ? 'visita' : 'visitas'}:`,
+    '',
+    ...lines,
+  ].join('\n');
+}
+
 // Counts for the Madrid-local day of `now`.
 // - nuevos: leads created today
 // - contactos: outbound actividades by channel (notes are not contacts)

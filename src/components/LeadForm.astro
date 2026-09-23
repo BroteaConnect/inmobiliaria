@@ -93,7 +93,7 @@ const { locale, propertyId, title } = Astro.props;
       const data = Object.fromEntries(new FormData(form)) as Record<string, string>;
       status.textContent = _('form.sending');
       try {
-        await create('leads', {
+        const created = await create<{ id: string }>('leads', {
           nombre: data.nombre, telefono: data.telefono, email: data.email,
           mensaje: data.mensaje, propiedad: data.propiedad, etapa: 'nuevo', origen: 'web',
           franja: data.franja || undefined,
@@ -106,7 +106,7 @@ const { locale, propertyId, title } = Astro.props;
         fetch('https://api.brotea.dev/requirements', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            project: 'inmobiliaria', source: 'lead_web',
+            project: 'inmobiliaria', source: 'lead_web', lead_id: created.id,
             submitted_by: `${data.nombre} <${data.telefono}>`,
             content: `LEAD para "${title}": ${data.mensaje || '(sin mensaje)'} — ${data.email || 'sin email'}`,
           }),
