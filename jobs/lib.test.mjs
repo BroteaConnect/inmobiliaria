@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   desatendidos, textoAgenda, resumenDelDia, textoResumen, haceCuanto,
-  diaMadrid, MAX_LINES, MAX_NOMBRE, ORIGEN_IMPORTADO,
+  diaMadrid, visitasDeHoy, textoVisitas, MAX_LINES, MAX_NOMBRE, ORIGEN_IMPORTADO,
 } from './lib.mjs';
 
 // Fixed "now": 2026-07-30 09:00 Europe/Madrid (CEST, UTC+2) = 07:00Z.
@@ -230,5 +230,116 @@ describe('textoResumen', () => {
     assert.match(txt, /Resumen del día/);
     assert.match(txt, /Leads nuevos: <b>1<\/b>/);
     assert.doesNotMatch(txt, /entrantes|entregados|publicadas|salientes/);
+  });
+});
+
+// The 09:00 agenda lists today's visits. "Today" is the Madrid-local day:
+// a visit stored at 22:30Z is already tomorrow's 00:30 for the agent.
+const visita = (over = {}) => ({
+  id: `v${++seq}`, cuando: '2026-07-30 08:00:00.000Z', resultado: 'pendiente',
+  expand: {
+    lead: { nombre: `Lead ${seq}` },
+    propiedad: { titulo: `Piso ${seq}` },
+    agente: { name: `Agente ${seq}` },
+  },
+  ...over,
+});
+
+describe('visitasDeHoy', () => {
+  it('keeps a 22:30Z visit of yesterday: it is 00:30 today in Madrid (CEST)', () => {
+    const v = visita({ cuando: '2026-07-29 22:30:00.000Z' });
+    assert.deepEqual(visitasDeHoy([v], NOW).map((x) => x.id), [v.id]);
+  });
+
+  it('drops a 23:30Z visit of today: it is 01:30 tomorrow in Madrid', () => {
+    const v = visita({ cuando: '2026-07-30 23:30:00.000Z' });
+    assert.deepEqual(visitasDeHoy([v], NOW), []);
+  });
+
+  it('follows the clock change in October (CEST → CET on 2026-10-25)', () => {
+    const now = new Date('2026-10-25T08:00:00.000Z'); // 09:00 CET, after the switch
+    const madrugada = visita({ cuando: '2026-10-24 22:30:00.000Z' }); // 00:30 CEST, today
+    const noche = visita({ cuando: '2026-10-25 22:30:00.000Z' }); // 23:30 CET, today
+    const manana = visita({ cuando: '2026-10-25 23:30:00.000Z' }); // 00:30 CET, tomorrow
+    const out = visitasDeHoy([manana, noche, madrugada], now);
+    assert.deepEqual(out.map((x) => x.id), [madrugada.id, noche.id]);
+  });
+
+  it('follows the clock change in March (CET → CEST on 2026-03-29)', () => {
+    const now = new Date('2026-03-29T07:00:00.000Z'); // 09:00 CEST, after the switch
+    const madrugada = visita({ cuando: '2026-03-28 23:30:00.000Z' }); // 00:30 CET, today
+    const manana = visita({ cuando: '2026-03-29 22:30:00.000Z' }); // 00:30 CEST, tomorrow
+    const out = visitasDeHoy([manana, madrugada], now);
+    assert.deepEqual(out.map((x) => x.id), [madrugada.id]);
+  });
+
+  it('excludes cancelled visits, keeps every other outcome', () => {
+    const cancelada = visita({ resultado: 'cancelada' });
+    const confirmada = visita({ resultado: 'confirmada' });
+    const sinResultado = visita({ resultado: '' });
+    const out = visitasDeHoy([cancelada, confirmada, sinResultado], NOW);
+    assert.deepEqual(out.map((x) => x.id), [confirmada.id, sinResultado.id]);
+  });
+
+  it('sorts by cuando ascending, whatever order PocketBase returned', () => {
+    const tarde = visita({ cuando: '2026-07-30 16:00:00.000Z' });
+    const manana = visita({ cuando: '2026-07-30 07:30:00.000Z' });
+    const mediodia = visita({ cuando: '2026-07-30 11:00:00.000Z' });
+    const out = visitasDeHoy([tarde, manana, mediodia], NOW);
+    assert.deepEqual(out.map((x) => x.id), [manana.id, mediodia.id, tarde.id]);
+  });
+
+  it('returns an empty list for zero visits or an unusable date', () => {
+    assert.deepEqual(visitasDeHoy([], NOW), []);
+    assert.deepEqual(visitasDeHoy([visita({ cuando: '' })], NOW), []);
+  });
+});
+
+describe('textoVisitas', () => {
+  it('returns null when there are no visits', () => {
+    assert.equal(textoVisitas([], NOW), null);
+  });
+
+  it('prints HH:MM in Madrid time, the lead in bold, then property and agent', () => {
+    const v = visita({
+      cuando: '2026-07-30 08:05:00.000Z', // 10:05 CEST
+      expand: { lead: { nombre: 'Ana' }, propiedad: { titulo: 'Ático en Ruzafa' }, agente: { name: 'Luis' } },
+    });
+    const txt = textoVisitas(visitasDeHoy([v], NOW), NOW);
+    assert.match(txt, /Visitas de hoy/);
+    assert.match(txt, /^• 10:05 · <b>Ana<\/b> · Ático en Ruzafa · Luis$/m);
+  });
+
+  it('shows midnight as 00:MM, not 24:MM', () => {
+    const v = visita({ cuando: '2026-07-29 22:10:00.000Z' }); // 00:10 CEST
+    assert.match(textoVisitas([v], NOW), /• 00:10 · /);
+  });
+
+  it('escapes lead, property and agent names (HTML mode)', () => {
+    const v = visita({
+      expand: { lead: { nombre: 'P&J <SL>' }, propiedad: { titulo: 'Piso <2>' }, agente: { name: 'A & B' } },
+    });
+    assert.match(textoVisitas([v], NOW), /<b>P&amp;J &lt;SL&gt;<\/b> · Piso &lt;2&gt; · A &amp; B/);
+  });
+
+  it('truncates an unbounded lead name before escaping', () => {
+    const v = visita({ expand: { lead: { nombre: '&'.repeat(500) } } });
+    assert.match(textoVisitas([v], NOW), new RegExp(`<b>${'&amp;'.repeat(MAX_NOMBRE)}</b> · `));
+  });
+
+  it('degrades a missing relation to a placeholder, never to "undefined"', () => {
+    const sinExpand = visita({ expand: undefined });
+    const parcial = visita({ expand: { lead: { nombre: 'Bea' } } });
+    const txt = textoVisitas([sinExpand, parcial], NOW);
+    assert.match(txt, /<b>lead sin nombre<\/b> · sin propiedad · sin agente/);
+    assert.match(txt, /<b>Bea<\/b> · sin propiedad · sin agente/);
+    assert.doesNotMatch(txt, /undefined/);
+  });
+
+  it('caps at MAX_LINES and adds the "y N más" tail', () => {
+    const vs = Array.from({ length: 13 }, () => visita());
+    const txt = textoVisitas(vs, NOW);
+    assert.equal((txt.match(/^• /gm) || []).length, MAX_LINES);
+    assert.match(txt, /… y 3 más/);
   });
 });
