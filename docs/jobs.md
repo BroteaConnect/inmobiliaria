@@ -31,6 +31,7 @@ aislamiento de fallos, reintentos) es del chasis y no se copia.
 | `jobs/unanswered.mjs` | hourly | A lead whose WhatsApp/email has waited more than **2 h** with no outbound row, once per unanswered streak, 09:00–21:00 only (see [unanswered](#unanswered)). |
 | `jobs/weekly-summary.mjs` | Fri 18:00 | The business summary of the week, never silent (see [weekly-summary](#weekly-summary)). |
 | `jobs/reactivation.mjs` | Mon 10:00 | A **proposal**: dormant leads that fit the published stock, for an agent to call. Nothing is sent to the leads (see [reactivation](#reactivation)). |
+| `jobs/owner-report.mjs` | 10:00, first weekday of the month (days 1–7) | **Drafts** of the monthly owner report for the previous month, for review. Nothing is sent to owners (see [owner-report](#owner-report)). |
 
 **El silencio es una feature**: si no hay leads desatendidos o el día está
 vacío, no se envía nada. Un canal que solo habla cuando hay algo que decir
@@ -227,6 +228,42 @@ yes.
   With n > 0: `reactivation.proposed` `{leads, properties, with_consent}`,
   then the message. With n = 0: nothing else.
 
+## owner-report
+
+`jobs/owner-report.mjs` (daily 10:00; rules in `jobs/owner-report.lib.mjs`)
+acts on the first Madrid weekday within the first 7 days of the month, once
+per month, and drafts the report of the **previous** month: one draft per
+(owner, published property), rendered from the live `plantillas` row
+`propietario.informe` (`cuerpo_es`, with `render()` from `campanas.lib.mjs`).
+Nothing is sent to an owner — no chassis call, no `owner_report.sent` —
+until Meta approves the template and the jobs hold their chassis secret.
+
+- Per draft: `contactos` (leads whose `propiedad` is the property, created in
+  the month, `histórico` excluded), `visitas` (held in the month), plus
+  `visitas_agendadas`, `visitas_no_show` and `actividad` for the agent's
+  eyes; `agente` = the on-duty agent, else "el equipo"; `mes` in Spanish;
+  owner first name only; title cut to 60. A draft is flagged `no enviable:
+  sin teléfono` / `sin consentimiento` when it could not be sent anyway.
+- Missing template: the variables are shown instead; the job does not fail.
+- Log line: `owner-report: <n> draft(s) for <YYYY-MM>`. With drafts: the
+  `owner_report.drafted` `{count, month, owners, not_sendable}` event, then
+  the marker, then the messages (split under 3900 chars, never inside a
+  draft). With none: only the marker.
+- Marker: settings row `jobs.owner_report` = `{v: 1, last_month: 'YYYY-MM'}`.
+  Under `--dry-run` the calendar/marker verdict is logged but bypassed (a
+  rehearsal always shows drafts) and the marker is not written.
+
+## State the jobs keep (settings rows)
+
+| Key | Value | Written by |
+|---|---|---|
+| `jobs.unanswered` | `{v: 1, alerted: {<actividades id>: <ISO>}}`, 7 days | `unanswered` |
+| `jobs.owner_report` | `{v: 1, last_month: 'YYYY-MM'}` | `owner-report` |
+
+Both are written only outside `--dry-run`, and only after the job's event.
+Deleting a row is safe: `unanswered` may repeat an alert for a streak still
+open, `owner-report` may draft the month again.
+
 ## campanas
 
 `jobs/campanas.mjs` (hourly, I/O only) advances every `campanas` row in
@@ -296,6 +333,11 @@ yes.
   una fila inofensiva, no un mensaje de Telegram.
 - Exception: `campanas` does write its own `campanas` row (never a lead), and
   under `--dry-run` every write and every chassis call is skipped and logged.
+- Exceptions too: `unanswered` and `owner-report` write their own settings
+  marker (see [State the jobs keep](#state-the-jobs-keep-settings-rows)),
+  never under `--dry-run`. `lead.unanswered_alert`, `project.weekly_summary`,
+  `reactivation.proposed` and `owner_report.drafted` are written before
+  `notify()`, like the others.
 
 Para añadir o modificar un job, usa la skill `jobs`
 (`.claude/skills/jobs/SKILL.md`), que documenta el contrato del módulo.
