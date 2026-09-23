@@ -3,8 +3,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  MAX_ENVIOS_POR_RUN, MAX_REINTENTOS_LEAD, SEGMENTO_VERSION, SegmentoInvalido, VARIABLES_DEL_CHASIS,
-  aplicarEnvio, aplicarRechazo, cerrarInforme, cuotaDelRun, dentroDeHorario, enviadosHoy, esRechazoTerminal,
+  MAX_ENLACES_FALLIDOS, MAX_ENVIOS_POR_RUN, MAX_REINTENTOS_LEAD, SEGMENTO_VERSION, SegmentoInvalido, VARIABLES_DEL_CHASIS,
+  aplicarEnvio, aplicarRechazo, cerrarInforme, cuotaDelRun, dentroDeHorario, enviadosHoy, esRechazoAmbiguo, esRechazoTerminal,
   evaluarSegmento, hhmmAMinutos, informeInicial, minutosMadrid, payloadCompletada, pendientes, plantillaLista,
   problemasSegmento, textoCampanaArmada, textoCampanaBloqueada, textoCampanaCompletada, textoCampanaPausada,
   variablesPara,
@@ -228,9 +228,13 @@ describe('cuotaDelRun', () => {
     assert.equal(cuotaDelRun({ campana: c, envios: [], now: NOW }).motivo, 'aun_no_empieza');
   });
 
-  it('reports a broken window and an impossible batch as configuration errors', () => {
+  it('reports a broken window, batch or interval as configuration errors', () => {
     assert.equal(cuotaDelRun({ campana: campana({ hora_desde: '18:00', hora_hasta: '10:00' }), now: NOW }).motivo, 'horario_invalido');
     assert.equal(cuotaDelRun({ campana: campana({ lote_diario: 0 }), now: NOW }).motivo, 'lote_invalido');
+    assert.equal(cuotaDelRun({ campana: campana({ intervalo_min: -5 }), now: NOW }).motivo, 'intervalo_invalido');
+    assert.equal(cuotaDelRun({ campana: campana({ intervalo_min: 'diez' }), now: NOW }).motivo, 'intervalo_invalido');
+    // An unset column still means "no pacing", which is a decision, not a typo.
+    assert.equal(cuotaDelRun({ campana: campana({ intervalo_min: '' }), now: NOW }).motivo, 'ok');
   });
 
   it('spends the daily batch on today rows only, and errors do not spend it', () => {
@@ -297,13 +301,33 @@ describe('esRechazoTerminal', () => {
   it('is retryable for transport, provider and rate limits', () => {
     for (const code of ['chassis_timeout', 'chassis_unreachable', 'provider_unavailable', '63018']) {
       assert.equal(esRechazoTerminal({ code, status: 502 }), false, code);
+      assert.equal(esRechazoAmbiguo({ code, status: 502 }), false, `${code} is a known "nothing left"`);
     }
     assert.equal(esRechazoTerminal({ code: 'slow_down', status: 429 }), false);
-    assert.equal(esRechazoTerminal({ code: 'boom', status: 500 }), false);
+    assert.equal(esRechazoAmbiguo({ code: 'slow_down', status: 429 }), false);
   });
 
   it('treats an unknown 4xx as terminal — it is a refusal we caused', () => {
     assert.equal(esRechazoTerminal({ code: 'nunca_visto', status: 400 }), true);
+  });
+});
+
+describe('esRechazoAmbiguo', () => {
+  it('claims the answers that arrive after the message may already have left', () => {
+    // /send-email answers this literal sentence — with a space, not an
+    // underscore — from a catch that also covers writes made after nodemailer
+    // accepted the mail.
+    assert.equal(esRechazoAmbiguo({ code: 'send failed', status: 502 }), true);
+    // Anything 5xx we have no name for is in the same class by default.
+    assert.equal(esRechazoAmbiguo({ code: 'http_500', status: 500 }), true);
+    assert.equal(esRechazoAmbiguo({ code: 'nunca_visto', status: 503 }), true);
+  });
+
+  it('never claims a refusal we understand', () => {
+    for (const code of ['no_email', 'no_consent', 'template_not_approved']) {
+      assert.equal(esRechazoAmbiguo({ code, status: 422 }), false, code);
+    }
+    assert.equal(esRechazoAmbiguo({ code: 'nunca_visto', status: 400 }), false, 'a 4xx never left');
   });
 });
 
@@ -337,6 +361,38 @@ describe('aplicarEnvio', () => {
     assert.deepEqual(out.en_vuelo, []);
     assert.deepEqual(out.reintentos, {});
     assert.equal(out.iniciada_en, NOW.toISOString());
+  });
+});
+
+describe('who has already been written to', () => {
+  it('records the lead in the informe, not only in the ledger', () => {
+    const out = aplicarEnvio(informeInicial(), { lead: 'lead001', now: NOW });
+    assert.deepEqual(out.enviados_ids, ['lead001']);
+    // Twice is not two people.
+    assert.deepEqual(aplicarEnvio(out, { lead: 'lead001', now: NOW }).enviados_ids, ['lead001']);
+  });
+
+  it('keeps a lead out of pendientes with NO envios row at all', () => {
+    // This is the chassis answering ok with envio_id: null — the send left,
+    // its ledger row did not. Without this the lead is written to every hour.
+    const a = lead();
+    const informe = aplicarEnvio(informeInicial(), { lead: a.id, now: NOW });
+    assert.deepEqual(pendientes({ destinatarios: [a], envios: [], informe }), []);
+  });
+
+  it('never reports fewer sends than it knows happened', () => {
+    const a = lead();
+    const informe = cerrarInforme(aplicarEnvio(informeInicial(), { lead: a.id, now: NOW }), {
+      destinatarios: [a], envios: [], enviadosEnRun: 1, now: NOW,
+    });
+    assert.equal(informe.enviados, 1);
+  });
+
+  it('caps the broken-link list: the informe is rewritten after every send', () => {
+    const enlaces = Array.from({ length: MAX_ENLACES_FALLIDOS + 10 }, (_, i) => ({ envio_id: `e${i}`, lead: `l${i}`, error: 'x' }));
+    const out = informeInicial({ enlaces_fallidos: enlaces });
+    assert.equal(out.enlaces_fallidos.length, MAX_ENLACES_FALLIDOS);
+    assert.equal(out.enlaces_fallidos.at(-1).envio_id, `e${enlaces.length - 1}`, 'the recent ones are the repairable ones');
   });
 });
 
@@ -483,6 +539,10 @@ describe('the Telegram texts', () => {
     assert.match(texto, /coincide con 216 · alcanzables 191 · sin teléfono 25/);
     assert.match(texto, /Bloqueada:.*no está aprobada por Meta/);
     assert.match(texto, /borrador/);
+    // It must describe the credit model, not promise "1 cada 10 min" and then
+    // send ten in five seconds on the first run.
+    assert.match(texto, new RegExp(`tandas de hasta ${MAX_ENVIOS_POR_RUN} por pasada horaria`));
+    assert.ok(!/1 cada \d+ min/.test(texto), texto);
   });
 
   it('says how to resume a paused campaign, and what blocked it', () => {

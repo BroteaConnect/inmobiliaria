@@ -203,9 +203,11 @@ Written by the job, read by a human. `armada_en` and `alcance_estimado` come
 from the arming preview (matched / reachable / unreachable, because "216
 recipients" when 25 of them have no phone is a number that gets approved and
 then disappoints); `enviados`, `estados` and `por_dia` are re-read from the
-`envios` ledger at every close, never accumulated in memory; `rechazos` tallies
-every chassis answer under its own code; `excluidos`, `reintentos`, `dudosos`,
-`en_vuelo` and `enlaces_fallidos` are the open questions; `bloqueo` is why
+`envios` ledger at every close, never accumulated in memory; `enviados_ids` is who
+has been written to (see below — it is the one record that must not live in
+another collection); `rechazos` tallies every chassis answer under its own
+code; `excluidos`, `reintentos`, `dudosos`, `en_vuelo` and `enlaces_fallidos`
+are the open questions; `bloqueo` is why
 nothing is going out; `informe_manager` records whether the manager's WhatsApp
 report went, and when it did not, exactly which precondition was missing.
 
@@ -224,6 +226,21 @@ The interval is spent as **credits**: an hourly runner cannot hold a process
 for eight hours, so a run may send `floor(minutes since ultimo_envio_en /
 intervalo_min)`, capped by what is left of `lote_diario` and by
 `MAX_ENVIOS_POR_RUN`.
+
+That means the drip arrives in **batches**, not one message every N minutes: a
+campaign with no `ultimo_envio_en` sends up to 10 in the first run, then as
+many as the interval has earned each hour. It is a real behaviour and the
+arming preview says so in those words — it used to promise "1 cada 10 min",
+which the very first run broke. Re-checking the wall clock inside the loop
+would make the promise literally true and quietly turn a 30-a-day campaign into
+an 8-a-day one, which is a product change hiding inside a wording fix. The
+messages go to *different* people, so the batch is bulk sending, not a person
+being messaged ten times.
+
+`lote_diario` below 1, an `intervalo_min` that is negative or not a number, and
+a window that does not run forwards are all configuration errors: they block
+the campaign and say so, instead of defaulting to something nobody chose. An
+empty `intervalo_min` column still means "no pacing", which is a decision.
 
 ### The state machine
 
@@ -249,34 +266,53 @@ not a standing rule. Sending to the newcomers is a new campaign.
 
 ### Sending twice is the failure that matters
 
+**Who has already been written to is recorded in `informe.enviados_ids`, by the
+job, at the moment of the send.** That is the invariant everything else rests
+on, and it deliberately depends on nothing outside the campaign row. The
+`envios` ledger cannot carry it: the chassis answers `ok` with `envio_id: null`
+whenever its own ledger write failed (it never fails a send that already left,
+by design), and the `envios.campana` patch can fail on its own. Reading "has
+this person received it?" off a foreign key means that, whenever either write
+misses, the next run finds the lead pending and writes to them again — every
+hour, for as long as it keeps missing. `pendientes()` therefore reads
+`enviados_ids` first, and the closing report never claims fewer sends than the
+job knows it made.
+
 Before every chassis call the recipient is appended to `informe.en_vuelo` and
 the campaign row is patched; the entry is removed once the send is resolved. If
 the patch itself fails, that recipient is skipped **without sending** — an
 unrecorded send is the one that gets doubled later. A surviving entry is
 resolved on the next run by **adoption**: if an `envios` row exists for that
-lead and template since then, it is adopted (its `campana` is patched) and
-counted as sent; if not, it moves to `informe.dudosos` and is **never retried**.
-A message that may have left is not sent again; the ambiguity is reported.
+lead **and that exact template**, not already claimed by another campaign, and
+created since then, it is adopted (its `campana` is patched) and counted as
+sent; if not, it moves to `informe.dudosos` and is **never retried**. Adoption
+re-stamps a row as this campaign's, so it has to be sure the row is ours — a
+loose match would rewrite another flow's history and report a delivery that
+never happened. An `en_vuelo` entry whose lead id could not be an id is
+discarded rather than interpolated into a filter: the column is editable from
+PocketBase Admin.
 
 Linking is two patches after the send — `envios.campana` and
 `actividades.campana` — and the activity id is read as
 `body.activity_id ?? body.actividad_id`, because `/send-email` and
 `/send-whatsapp` disagree on the name. A failed patch never makes a lead
-pending again: it goes to `informe.enlaces_fallidos` and the next run repairs
-it first.
+pending again (`enviados_ids` is what decides): it goes to
+`informe.enlaces_fallidos`, capped at the 50 most recent because `informe` is
+rewritten after every single send, and the next run repairs it first.
 
 ### What the chassis answers, and what it costs
 
 | answer | what the job does |
 |---|---|
 | `no_email`, `no_phone`, `no_consent`, `consent_revoked`, `template_not_approved`, `outside_window`, any other 4xx | terminal for that lead: `informe.excluidos`, and the campaign can complete |
-| `chassis_timeout`, `chassis_unreachable`, `provider_unavailable`, 5xx, 429, Twilio `63018` | retryable: stays pending, `informe.reintentos[lead]++`, given up as `agotado` at 3 |
+| `chassis_timeout`, `chassis_unreachable`, `provider_unavailable`, 429, Twilio `63018` | retryable, because the chassis said in so many words that nothing left: stays pending, `informe.reintentos[lead]++`, given up as `agotado` at 3 |
 | `variables_missing` | terminal for the RUN: the same values are built for everybody, so one bug must not burn ten leads |
+| `send failed` and **any unnamed 5xx** | ambiguous, treated exactly like silence (below). `/send-email` returns 502 `send failed` from a catch that also covers the writes it makes *after* the mail has been accepted, so retrying it is how one person gets three copies |
 | no answer at all | the entry stays in flight, the run **fails** so Alertas hears, and the next run adopts it or files it as `dudoso` |
 
-Only a chassis that never answered makes `run()` throw. Business refusals never
-do: three throws in one Madrid day open the runner's circuit and the campaign
-would stall until tomorrow.
+Only a chassis that never answered — or answered ambiguously — makes `run()`
+throw. Business refusals never do: three throws in one Madrid day open the
+runner's circuit and the campaign would stall until tomorrow.
 
 ### Preconditions, and no fallbacks
 
@@ -293,7 +329,9 @@ The manager's WhatsApp report is checked as data and never faked: a `settings`
 row `campanas.gestor` naming a lead, that lead existing with a phone, and the
 `campana.informe` template being `approved`. Any one missing and **no call is
 made**, with the exact missing precondition recorded in
-`informe.informe_manager` and echoed in the Telegram line.
+`informe.informe_manager` and echoed in the Telegram line. It is sent **once,
+ever**: the result is written on its own the moment it is known, so a closing
+write that fails cannot make the next run report the same campaign twice.
 
 ### The catalog
 

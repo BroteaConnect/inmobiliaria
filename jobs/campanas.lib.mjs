@@ -31,6 +31,10 @@ export const MAX_REINTENTOS_LEAD = 3;
 // Runs in a row that sent nothing pause the campaign instead of retrying for
 // ever — three quiet runs are a configuration problem, not bad luck.
 export const RUNS_SIN_ENVIO_PARA_PAUSAR = 3;
+// `informe` is a column rewritten after every single send, so no list inside
+// it may grow without a bound. The oldest broken links are dropped first: the
+// recent ones are the ones a repair can still act on.
+export const MAX_ENLACES_FALLIDOS = 50;
 
 // The runner only ever picks these up, and never writes any other state.
 export const ESTADOS_ACTIVOS = ['programada', 'en_curso'];
@@ -282,6 +286,11 @@ export function cuotaDelRun({ campana, envios = [], now = new Date() }) {
   const nada = (motivo) => ({ permitidos: 0, motivo, enviadosHoy: 0 });
   if (dentroDeHorario(campana, now) === null) return nada('horario_invalido');
   if (!esEnteroDesde(Number(campana.lote_diario), 1)) return nada('lote_invalido');
+  // 0 and an unset column both mean "no pacing"; -5 or "diez" means somebody
+  // meant something and it did not arrive. Silently disabling the drip is the
+  // one reading that is never what they meant.
+  const intervalo = campana.intervalo_min == null || campana.intervalo_min === '' ? 0 : Number(campana.intervalo_min);
+  if (!esEnteroDesde(intervalo, 0)) return nada('intervalo_invalido');
   if (campana.inicio) {
     const inicio = parseFecha(campana.inicio);
     if (esFecha(inicio) && now < inicio) return nada('aun_no_empieza');
@@ -292,7 +301,6 @@ export function cuotaDelRun({ campana, envios = [], now = new Date() }) {
   const restante = Number(campana.lote_diario) - hoy;
   if (restante <= 0) return { permitidos: 0, motivo: 'lote_diario_agotado', enviadosHoy: hoy };
 
-  const intervalo = Number(campana.intervalo_min) || 0;
   let creditos = restante;
   if (intervalo > 0) {
     const ultimo = parseFecha(campana.ultimo_envio_en);
@@ -313,13 +321,35 @@ export const RECHAZOS_TERMINALES = [
   'template_unknown', 'template_channel', 'template_retired', 'template_not_approved', 'template_required',
   'outside_window', 'text_too_long', 'actividad_invalid', 'agotado',
 ];
-// Retryable: the same message may well go out on the next run.
+// Retryable: the chassis said, in so many words, that nothing left. The same
+// message may well go out on the next run.
 export const RECHAZOS_REINTENTABLES = [
-  'chassis_timeout', 'chassis_unreachable', 'provider_unavailable', 'ledger_unavailable', 'send_failed', '63018',
+  'chassis_timeout', 'chassis_unreachable', 'provider_unavailable', 'ledger_unavailable', '63018',
 ];
+// AMBIGUOUS: the chassis answered "no" AFTER the message may already have
+// gone. `/send-email` returns 502 `send failed` whenever sendTrackedEmail
+// throws — and it can throw on the `actividades` POST or the `leads` PATCH,
+// both of which run after nodemailer has accepted the message. Retrying that
+// is how one lead gets three copies, so an ambiguous refusal is treated like
+// no answer at all: the recipient stays in `en_vuelo` and the next run adopts
+// it or files it as `dudoso`. Note the space: the chassis sends the sentence,
+// not an identifier, and a whitelist with an underscore never matched it.
+export const RECHAZOS_AMBIGUOS = ['send failed', 'sent_unrecorded'];
 // Terminal for the whole RUN: the variables are built the same way for
 // everybody, so one missing value would burn ten leads on one bug.
 export const RECHAZOS_DE_RUN = ['variables_missing'];
+
+/**
+ * True when we cannot tell whether the message left. Anything the chassis has
+ * not given a known code to, answered with a 5xx, is in this class: a server
+ * error after the send is exactly the case a retry duplicates.
+ */
+export function esRechazoAmbiguo({ code, status } = {}) {
+  const c = String(code ?? '');
+  if (RECHAZOS_AMBIGUOS.includes(c)) return true;
+  if (RECHAZOS_TERMINALES.includes(c) || RECHAZOS_REINTENTABLES.includes(c)) return false;
+  return (Number(status) || 0) >= 500;
+}
 
 /** True when this refusal will never resolve by trying again. */
 export function esRechazoTerminal({ code, status } = {}) {
@@ -351,6 +381,14 @@ export function informeInicial(previo = {}) {
     completada_en: p.completada_en ?? null,
     destinatarios: Number(p.destinatarios) || 0,
     enviados: Number(p.enviados) || 0,
+    // WHO has already been written to, recorded by the job itself. The ledger
+    // is the truth about counts, but it cannot be the truth about "did this
+    // person already get it": the chassis answers `ok` with `envio_id: null`
+    // whenever its own `envios` POST failed (it deliberately never fails a
+    // send that already left), and the `campana` patch can fail too. Depending
+    // on a foreign-key write landing means the next run sees the lead as
+    // pending and writes to them again, every hour, for ever.
+    enviados_ids: Array.isArray(p.enviados_ids) ? [...p.enviados_ids] : [],
     por_dia: esObjeto(p.por_dia) ? { ...p.por_dia } : {},
     estados: esObjeto(p.estados) ? { ...p.estados } : {},
     rechazos: esObjeto(p.rechazos) ? { ...p.rechazos } : {},
@@ -358,7 +396,7 @@ export function informeInicial(previo = {}) {
     reintentos: esObjeto(p.reintentos) ? { ...p.reintentos } : {},
     dudosos: Array.isArray(p.dudosos) ? [...p.dudosos] : [],
     en_vuelo: Array.isArray(p.en_vuelo) ? [...p.en_vuelo] : [],
-    enlaces_fallidos: Array.isArray(p.enlaces_fallidos) ? [...p.enlaces_fallidos] : [],
+    enlaces_fallidos: Array.isArray(p.enlaces_fallidos) ? p.enlaces_fallidos.slice(-MAX_ENLACES_FALLIDOS) : [],
     bloqueo: p.bloqueo ?? null,
     runs: Number(p.runs) || 0,
     ultimo_run_en: p.ultimo_run_en ?? null,
@@ -373,6 +411,7 @@ export function aplicarEnvio(informe, { lead, now = new Date() }) {
   const out = informeInicial(informe);
   const dia = diaMadrid(now) ?? 'sin-fecha';
   out.enviados += 1;
+  if (!out.enviados_ids.includes(lead)) out.enviados_ids = [...out.enviados_ids, lead];
   out.por_dia = { ...out.por_dia, [dia]: (out.por_dia[dia] ?? 0) + 1 };
   out.en_vuelo = out.en_vuelo.filter((e) => e.lead !== lead);
   const { [lead]: _fuera, ...resto } = out.reintentos;
@@ -404,6 +443,7 @@ export function aplicarRechazo(informe, { lead, code, status, now = new Date() }
 
 /** Lead ids this campaign has already resolved, one way or another. */
 const resueltos = (informe, envios) => new Set([
+  ...informe.enviados_ids,
   ...envios.map((e) => e.lead),
   ...informe.excluidos.map((e) => e.lead),
   ...informe.dudosos.map((e) => e.lead),
@@ -431,7 +471,11 @@ export function pendientes({ destinatarios = [], envios = [], informe = {} }) {
 export function cerrarInforme(informe, { destinatarios = [], envios = [], enviadosEnRun = 0, now = new Date(), completada = false }) {
   const out = informeInicial(informe);
   out.destinatarios = destinatarios.length;
-  out.enviados = envios.filter((e) => e.estado !== 'error').length;
+  // The ledger is the truth, EXCEPT that it cannot see a send whose `envios`
+  // row the chassis failed to write (it answers ok with envio_id: null). Those
+  // are in enviados_ids and they happened, so the report never claims fewer
+  // messages than we know went out.
+  out.enviados = Math.max(envios.filter((e) => e.estado !== 'error').length, out.enviados_ids.length);
   out.estados = envios.reduce((a, e) => ({ ...a, [e.estado || 'sin_estado']: (a[e.estado || 'sin_estado'] ?? 0) + 1 }), {});
   out.runs += 1;
   out.ultimo_run_en = new Date(now).toISOString();
@@ -521,7 +565,12 @@ export function textoCampanaArmada({ campana, plantilla = {}, informe }) {
     `• Destinatarios estimados: ${inf.destinatarios_estimados ?? 0}`, // lang-sweep: allow
     `• El segmento coincide con ${Number(alcance.coincidentes) || 0} · alcanzables ${Number(alcance.alcanzables) || 0} · ${etiqueta} ${sinContacto}`, // lang-sweep: allow
     `• Plantilla: ${recorta(plantilla.clave || 'sin plantilla')} (${escapeHtml(plantilla.canal || 'sin canal')})`, // lang-sweep: allow
-    `• Ritmo: ${Number(campana.lote_diario) || 0}/día, 1 cada ${Number(campana.intervalo_min) || 0} min, de ${escapeHtml(campana.hora_desde || '--:--')} a ${escapeHtml(campana.hora_hasta || '--:--')}`, // lang-sweep: allow
+    // The honest sentence, not the flattering one: the job runs once an hour
+    // and spends the interval as credits, so it sends in batches of up to
+    // MAX_ENVIOS_POR_RUN — saying "1 cada 10 min" would promise a pace the
+    // owner would then watch it break on the very first run.
+    `• Ritmo: hasta ${Number(campana.lote_diario) || 0}/día, en tandas de hasta ${MAX_ENVIOS_POR_RUN} por pasada horaria (el intervalo de ${Number(campana.intervalo_min) || 0} min se acumula entre pasadas)`, // lang-sweep: allow
+    `• Horario: de ${recorta(campana.hora_desde || '--:--')} a ${recorta(campana.hora_hasta || '--:--')}`, // lang-sweep: allow
   ];
   const lista = plantillaLista(plantilla);
   if (!lista.listo) lineas.push(`• ⛔ Bloqueada: ${recorta(lista.motivo)}`); // lang-sweep: allow

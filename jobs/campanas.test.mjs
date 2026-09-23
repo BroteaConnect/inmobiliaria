@@ -266,6 +266,173 @@ describe('a send', () => {
   });
 });
 
+describe('the same person is never written to twice', () => {
+  // Both of these were real: two consecutive runs sending two messages to one
+  // lead, because "already written to" was read off a row in another
+  // collection that the chassis had not managed to write.
+  it('a send the chassis could not put in the ledger still counts (envio_id: null)', async () => {
+    const pb = fakePb(datosBase());
+    // Documented chassis behaviour: it never fails a send that already left,
+    // so a failing envios POST answers ok with envio_id: null.
+    conChasis(() => respuesta(200, { ok: true, envio_id: null, activity_id: null, message_id: '<x@brotea.dev>' }));
+    const primera = contexto(pb);
+    await run(primera.ctx);
+    assert.equal(llamadas.length, 1);
+    assert.deepEqual(pb.store.campanas[0].informe.enviados_ids, [leadUno.id]);
+
+    const segunda = contexto(pb);
+    await run(segunda.ctx);
+    assert.equal(llamadas.length, 1, 'the second run must not write to the same person again');
+    assert.equal(pb.store.campanas[0].informe.enviados, 1);
+    assert.equal(pb.store.campanas[0].estado, 'completada');
+  });
+
+  it('a send whose campaign link could not be patched still counts', async () => {
+    const pb = fakePb(datosBase());
+    conChasis(() => {
+      pb.store.envios.push({ id: 'env1', lead: leadUno.id, plantilla: plantillaEmail.id, campana: '', estado: 'enviado', enviado_en: '2026-09-23 10:00:00.000Z', created: '2026-09-23 10:00:00.000Z' });
+      return respuesta(200, { ok: true, envio_id: 'env1', activity_id: null });
+    });
+    // The link patch fails for ever; the lead must still not be written to twice.
+    const update = pb.collection('envios').update;
+    pb.collection = ((original) => (nombre) => {
+      const col = original(nombre);
+      return nombre === 'envios' ? { ...col, update: async () => { throw new Error('PATCH envios → 500'); } } : col;
+    })(pb.collection);
+    void update;
+
+    const primera = contexto(pb);
+    await run(primera.ctx);
+    assert.equal(llamadas.length, 1);
+    assert.equal(pb.store.envios[0].campana, '', 'the link really did not land');
+    assert.deepEqual(pb.store.campanas[0].informe.enviados_ids, [leadUno.id]);
+    assert.equal(pb.store.campanas[0].informe.enlaces_fallidos.length, 1);
+
+    const segunda = contexto(pb);
+    await run(segunda.ctx);
+    assert.equal(llamadas.length, 1, 'a failed link never makes a lead pending again');
+  });
+
+  it('a 502 after the mail may have left is never retried', async () => {
+    const pb = fakePb(datosBase());
+    // /send-email answers this when sendTrackedEmail throws — which it can do
+    // on the writes it makes AFTER nodemailer accepted the message.
+    conChasis(() => respuesta(502, { error: 'send failed', detail: 'actividades POST → 500' }));
+    const primera = contexto(pb);
+    await assert.rejects(run(primera.ctx), /send failed/);
+    assert.equal(llamadas.length, 1);
+    assert.deepEqual(pb.store.campanas[0].informe.en_vuelo.map((e) => e.lead), [leadUno.id]);
+
+    conChasis(() => { throw new Error('it may already have been sent: never a second time'); });
+    const segunda = contexto(pb);
+    await run(segunda.ctx);
+    assert.equal(llamadas.length, 1);
+    const informe = pb.store.campanas[0].informe;
+    assert.deepEqual(informe.dudosos.map((d) => d.lead), [leadUno.id]);
+    assert.equal(informe.rechazos['send failed'], 1);
+    assert.equal(informe.enviados, 0, 'we do not claim a send we cannot prove either');
+  });
+});
+
+describe('adoption only ever adopts our own send', () => {
+  const enVuelo = (pb) => { pb.store.campanas[0].informe = { v: 1, en_vuelo: [{ lead: leadUno.id, desde: '2026-09-23T09:00:00.000Z' }] }; };
+
+  it('refuses a row that belongs to another campaign', async () => {
+    const pb = fakePb(datosBase());
+    enVuelo(pb);
+    pb.store.envios.push({ id: 'envOtra', lead: leadUno.id, plantilla: plantillaEmail.id, campana: 'otracampana01', estado: 'enviado', enviado_en: '2026-09-23 09:00:30.000Z', created: '2026-09-23 09:00:30.000Z' });
+    conChasis(() => { throw new Error('nothing may be sent'); });
+    const { ctx } = contexto(pb);
+    await run(ctx);
+    assert.equal(pb.store.envios[0].campana, 'otracampana01', 're-stamping another campaign rewrites its history');
+    assert.deepEqual(pb.store.campanas[0].informe.dudosos.map((d) => d.lead), [leadUno.id]);
+    assert.equal(pb.store.campanas[0].informe.enviados, 0);
+  });
+
+  it('refuses a row of another template, or with no template at all', async () => {
+    for (const plantillaRow of [plantillaWhatsapp.id, '']) {
+      const pb = fakePb(datosBase());
+      enVuelo(pb);
+      pb.store.envios.push({ id: 'envOtra', lead: leadUno.id, plantilla: plantillaRow, campana: '', estado: 'enviado', enviado_en: '2026-09-23 09:00:30.000Z', created: '2026-09-23 09:00:30.000Z' });
+      conChasis(() => { throw new Error('nothing may be sent'); });
+      const { ctx } = contexto(pb);
+      await run(ctx);
+      assert.equal(pb.store.envios[0].campana, '', `a row with plantilla "${plantillaRow}" is not ours`);
+      assert.deepEqual(pb.store.campanas[0].informe.dudosos.map((d) => d.lead), [leadUno.id]);
+    }
+  });
+
+  it('drops an in-flight entry whose lead id could not be an id', async () => {
+    const pb = fakePb(datosBase());
+    pb.store.campanas[0].informe = { v: 1, en_vuelo: [{ lead: 'no-es-un-id" || true', desde: '2026-09-23T09:00:00.000Z' }] };
+    conChasis(() => respuesta(200, { ok: true, envio_id: null, activity_id: null }));
+    const { ctx, lineas } = contexto(pb);
+    await run(ctx);
+    assert.deepEqual(pb.store.campanas[0].informe.en_vuelo, []);
+    assert.ok(lineas.some((l) => l.includes('impossible lead id')), lineas.join('\n'));
+  });
+});
+
+describe("the manager's report", () => {
+  const conGestor = (pb) => {
+    pb.store.settings.push({ id: 'set2', key: 'campanas.gestor', value: { v: 1, text: 'gestor0000001' } });
+    pb.store.leads.push({ id: 'gestor0000001', nombre: 'Gestora', telefono: '+34600999999', email: '' });
+    pb.store.plantillas.push({ id: 'plant000000003', clave: 'campana.informe', canal: 'whatsapp', content_estado: 'approved', variables: ['campana', 'enviados', 'entregados', 'respuestas', 'bajas', 'errores'] });
+  };
+
+  it('is never sent a second time when the closing write failed', async () => {
+    const pb = fakePb(datosBase());
+    conGestor(pb);
+    // The campaign already finished and the report already went out; only the
+    // final write did not land, so this run recomputes "completada".
+    pb.store.campanas[0].informe = {
+      v: 1, enviados_ids: [leadUno.id], enviados: 1,
+      informe_manager: { canal: 'whatsapp', estado: 'enviado', motivo: null, comprobado_en: '2026-09-23T09:00:00.000Z' },
+    };
+    conChasis(() => { throw new Error('the manager must not be told twice'); });
+    const { ctx } = contexto(pb);
+    await run(ctx);
+    assert.equal(llamadas.length, 0);
+    assert.equal(pb.store.campanas[0].estado, 'completada');
+  });
+
+  it('keeps the run\'s bookkeeping when the template read throws', async () => {
+    const pb = fakePb(datosBase());
+    conGestor(pb);
+    conChasis(() => respuesta(200, { ok: true, envio_id: null, activity_id: null }));
+    const original = pb.collection;
+    pb.collection = (nombre) => {
+      const col = original(nombre);
+      return nombre === 'plantillas' ? { ...col, getFullList: async () => { throw new Error('PocketBase GET plantillas → 500'); } } : col;
+    };
+    const { ctx } = contexto(pb);
+    await run(ctx); // must not reject: a report is not worth the run's memory
+    const informe = pb.store.campanas[0].informe;
+    assert.deepEqual(informe.enviados_ids, [leadUno.id], 'the send survived the failed read');
+    assert.equal(informe.informe_manager.estado, 'no_enviado');
+    assert.match(informe.informe_manager.motivo, /no se pudo leer/);
+    assert.equal(pb.store.campanas[0].estado, 'completada');
+  });
+
+  it('sends it once when every precondition is data, not a guess', async () => {
+    const pb = fakePb(datosBase());
+    conGestor(pb);
+    conChasis((url) => {
+      if (url.includes('/send-whatsapp')) return respuesta(200, { ok: true, envio_id: 'envG', actividad_id: 'actG', mensaje_id: 'SM1' });
+      return respuesta(200, { ok: true, envio_id: null, activity_id: null });
+    });
+    const { ctx } = contexto(pb);
+    await run(ctx);
+    const informe = pb.store.campanas[0].informe;
+    assert.equal(informe.informe_manager.estado, 'enviado');
+    const reporte = llamadas.find((l) => l.url.includes('/send-whatsapp'));
+    assert.equal(reporte.body.plantilla, 'campana.informe');
+    assert.deepEqual(reporte.body.variables, {
+      campana: 'Ensayo', enviados: '1', entregados: '0', respuestas: '0', bajas: '0', errores: '0',
+    });
+  });
+});
+
 describe('what stops a campaign, and stops it loudly', () => {
   it('refuses to send without chassis credentials, and changes no state', async () => {
     conChasis(() => { throw new Error('there is nothing to call'); });

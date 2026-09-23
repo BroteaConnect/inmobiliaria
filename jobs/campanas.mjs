@@ -24,8 +24,8 @@
 //     parseable segment: `informe.bloqueo`, one Telegram line a day, and the
 //     campaign's `estado` is left exactly as it was.
 import {
-  ESTADOS_ACTIVOS, RECHAZOS_DE_RUN, RUNS_SIN_ENVIO_PARA_PAUSAR, SegmentoInvalido,
-  aplicarEnvio, aplicarRechazo, cerrarInforme, cuotaDelRun, evaluarSegmento, informeInicial,
+  ESTADOS_ACTIVOS, MAX_ENLACES_FALLIDOS, RECHAZOS_DE_RUN, RUNS_SIN_ENVIO_PARA_PAUSAR, SegmentoInvalido,
+  aplicarEnvio, aplicarRechazo, cerrarInforme, cuotaDelRun, esRechazoAmbiguo, evaluarSegmento, informeInicial,
   payloadCompletada, pendientes, plantillaLista, textoCampanaArmada, textoCampanaBloqueada,
   textoCampanaCompletada, textoCampanaPausada, variablesPara,
 } from './campanas.lib.mjs';
@@ -181,8 +181,16 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
     try { gestor = await pb.collection('leads').getOne(gestorId); } catch { gestor = null; }
     if (!gestor) return no(`el lead del gestor (${gestorId}) no existe`); // lang-sweep: allow
     if (!String(gestor.telefono ?? '').trim()) return no('el lead del gestor no tiene teléfono'); // lang-sweep: allow
-    const plantillas = await pb.collection('plantillas').getFullList({ filter: `clave = "${PLANTILLA_INFORME}"` });
-    const plantilla = plantillas[0] ?? null;
+    // The only read left on this path that could throw. It runs AFTER the
+    // sends, so letting it escape would throw away the run's whole bookkeeping
+    // — the dudosos, the enviados_ids, the in-flight list — over a report.
+    let plantilla = null;
+    try {
+      const plantillas = await pb.collection('plantillas').getFullList({ filter: `clave = "${PLANTILLA_INFORME}"` });
+      plantilla = plantillas[0] ?? null;
+    } catch (e) {
+      return no(`no se pudo leer la plantilla ${PLANTILLA_INFORME}: ${String(e?.message ?? e).slice(0, 80)}`); // lang-sweep: allow
+    }
     if (!plantilla) return no(`no existe la plantilla ${PLANTILLA_INFORME}`); // lang-sweep: allow
     if (plantilla.content_estado !== 'approved') {
       return no(`la plantilla ${PLANTILLA_INFORME} no está aprobada por Meta (Twilio Content: ${plantilla.content_estado || 'sin enviar'})`); // lang-sweep: allow
@@ -206,7 +214,11 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
     }).length;
     const variables = {
       campana: String(campana.nombre ?? '').slice(0, 120),
-      enviados: String(envios.filter((e) => e.estado !== 'error').length),
+      // The reconciled count, the same one the Telegram line reports: the
+      // ledger alone would undercount a send whose envios row the chassis
+      // never managed to write, and two reports of one campaign disagreeing
+      // is worse than either number.
+      enviados: String(Math.max(envios.filter((e) => e.estado !== 'error').length, informe.enviados_ids?.length ?? 0)),
       entregados: String(envios.filter((e) => ['entregado', 'abierto', 'click'].includes(e.estado)).length),
       respuestas: String(respuestas),
       bajas: String(bajas),
@@ -247,11 +259,21 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
       const dudosos = [...informe.dudosos];
       for (const entrada of informe.en_vuelo) {
         let adoptado = null;
+        // `informe` is editable in PocketBase Admin, so an id out of it is
+        // untrusted input on its way into a filter string.
+        if (!PB_ID.test(String(entrada.lead ?? ''))) {
+          log(`campanas: ${campana.nombre}: discarding an in-flight entry with an impossible lead id`);
+          continue;
+        }
         try {
           const suyos = await pb.collection('envios').getFullList({ filter: `lead = "${entrada.lead}"` });
           const desde = parseFecha(entrada.desde);
           adoptado = suyos.find((e) => {
-            if (plantilla?.id && e.plantilla && e.plantilla !== plantilla.id) return false;
+            // Adoption RE-STAMPS the row as ours, so it has to be ours: the
+            // same template, and not already claimed by another campaign. A
+            // row with no template at all is somebody else's free-text send.
+            if (!plantilla?.id || e.plantilla !== plantilla.id) return false;
+            if (e.campana && e.campana !== campana.id) return false;
             const creado = parseFecha(e.enviado_en || e.created);
             return esFecha(creado) && esFecha(desde) && creado >= new Date(desde.getTime() - 60_000);
           }) ?? null;
@@ -369,6 +391,19 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
         break;
       }
 
+      if (!r.ok && esRechazoAmbiguo(r)) {
+        // The chassis said no AFTER the message may already have gone (a 502
+        // from /send-email happens on writes that run once nodemailer has
+        // accepted it). Retrying is how one person gets three copies, so this
+        // is handled exactly like silence: the entry STAYS in en_vuelo, the
+        // next run adopts it or files it as dudoso, and the run fails loudly.
+        informe = { ...informe, rechazos: { ...informe.rechazos, [r.code]: (informe.rechazos[r.code] ?? 0) + 1 } };
+        await escribir(() => pb.collection('campanas').update(campana.id, { informe }));
+        fallosTransporte.push(`${lead.id}: ${r.code}`);
+        log(`campanas: ${campana.nombre}: ${ruta} answered ${r.code} (HTTP ${r.status}) for lead ${lead.id} — it may have been sent; not retrying`);
+        break;
+      }
+
       if (!r.ok) {
         if (RECHAZOS_DE_RUN.includes(r.code)) {
           informe = await bloquear(campana, informe, { code: r.code, motivo: `el chasis rechazó el envío: ${r.code}` }); // lang-sweep: allow
@@ -389,13 +424,19 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
       };
       await enlazar('envios', r.envio_id);
       await enlazar('actividades', r.actividad_id);
+      // aplicarEnvio() records the lead in informe.enviados_ids, which is what
+      // makes "already written to" independent of the two patches above ever
+      // landing — and of the chassis having managed to write an envios row at
+      // all (it answers ok with envio_id: null when its own ledger write
+      // failed, and swallowing that is documented behaviour on its side).
       informe = aplicarEnvio(informe, { lead: lead.id, now: new Date() });
+      if (!r.envio_id) log(`campanas: ${campana.nombre}: the chassis wrote no envios row for lead ${lead.id}; the send is recorded in the informe`);
       if (fallos.length) {
         informe = {
           ...informe,
           enlaces_fallidos: [...informe.enlaces_fallidos, {
             envio_id: r.envio_id ?? null, actividad_id: r.actividad_id ?? null, lead: lead.id, error: fallos.join('; '),
-          }],
+          }].slice(-MAX_ENLACES_FALLIDOS),
         };
       }
       enviadosEnRun++;
@@ -433,7 +474,17 @@ export async function run({ pb, notify, event, log, now, dryRun = false, env = {
     let estado = campana.estado;
     if (completada) {
       estado = 'completada';
-      informe = { ...informe, informe_manager: await informeDelGestor(campana, informe, envios, alcance.destinatarios) };
+      // Sent once, ever. If the closing write below fails, the next run
+      // recomputes `completada` and would otherwise WhatsApp the manager a
+      // second report — so the result is written on its own the moment it is
+      // known, and an already-sent report is never re-sent.
+      if (informe.informe_manager?.estado !== 'enviado') {
+        const informeManager = await informeDelGestor(campana, informe, envios, alcance.destinatarios);
+        informe = { ...informe, informe_manager: informeManager };
+        if (informeManager.estado === 'enviado') {
+          await escribir(() => pb.collection('campanas').update(campana.id, { informe }));
+        }
+      }
     } else if (!abortado && informe.runs_sin_envio >= RUNS_SIN_ENVIO_PARA_PAUSAR) {
       estado = 'pausada';
       informe = {
