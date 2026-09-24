@@ -24,7 +24,10 @@ El escaparate es bilingüe es/en sobre el contrato i18n de la fábrica
 (rutas `[...lang]`, `t()`, `LanguageSwitcher`, gate de CI) — ver
 [docs/i18n.md](i18n.md); los datos de las propiedades (titulo,
 descripcion…) no se traducen. Los jobs programados (agenda 09:00 +
-resumen 20:00 por Telegram) en [docs/jobs.md](jobs.md). The design brief
+resumen 20:00 por Telegram) en [docs/jobs.md](jobs.md); since E6 they also
+include `unanswered` (hourly), `weekly-summary` (Fri 18:00), `reactivation`
+(Mon 10:00, a proposal to the team only) and `owner-report` (monthly drafts,
+nothing sent to owners), all described there. The design brief
 every E3 pull request was judged against is [docs/design-read.md](design-read.md).
 
 ## Flujos clave
@@ -33,7 +36,9 @@ every E3 pull request was judged against is [docs/design-read.md](design-read.md
   `propiedad` field preset) → `create('leads')` en PocketBase
   (regla `create` pública) **y** POST a `api.brotea.dev/requirements`
   (chasis) → aviso al topic de Telegram del proyecto. El CRM lo ve aparecer
-  en tiempo real (suscripción SSE a `leads`).
+  en tiempo real (suscripción SSE a `leads`). The form writes
+  `leads.origen = 'cartel'` when the visitor came from a printed poster and
+  `'web'` otherwise — see [Printable poster](#printable-poster-2026-09-24).
 - **Propiedad se publica**: en el CRM, `estado = "publicada"` → visible en el
   catálogo al instante (el escaparate lee client-side con el filtro
   `estado="publicada"`; no hay rebuild). Its own page,
@@ -279,6 +284,7 @@ absolute.
 |---|---|---|
 | `/`, `/en/` | at build | the catalogue: hero, filters and cards; the cards are fetched in the browser |
 | `/propiedad/<id>`, `/en/propiedad/<id>` | per request | one published property, with `og:` tags and JSON-LD in the HTML |
+| `/propiedad/<id>/cartel`, `/en/propiedad/<id>/cartel` | per request | the printable A4 poster of one published property, `noindex` (see [Printable poster](#printable-poster-2026-09-24)) |
 | `/aviso-legal`, `/privacidad`, `/cookies` (and `/en/…`) | at build | the legal pages |
 
 `npm run build` writes the static files to `dist/client/` and the server to
@@ -337,6 +343,69 @@ route falls back to the container's own `process.env.PUBLIC_PB_URL`
 `data-exclude-search="true"` and `data-exclude-hash="true"`: the filters
 rewrite the query string with `history.replaceState` (keeping any hash), and
 a narrower view of the same page is not a new pageview.
+
+## Printable poster (2026-09-24)
+
+Every published property has a one-sheet A4 poster for a shop window or a
+street door (`src/pages/[...lang]/propiedad/[id]/cartel.astro`):
+
+```
+https://inmobiliaria.brotea.dev/propiedad/<id>/cartel
+https://inmobiliaria.brotea.dev/en/propiedad/<id>/cartel
+```
+
+There is no link to it anywhere in the site or the CRM yet: an agent opens it
+by typing the URL (the property page's address plus `/cartel`), then uses
+the page's print button (hidden on paper) or the browser's print dialog.
+
+**What it answers.** The same rules as the property page, through the same
+`publishedProperty(id)`: 200 for a published property, 404 for a draft, a
+reserved or sold listing, an unknown id or a locale prefix that does not
+exist, 503 when PocketBase is unreachable; the same `Cache-Control` values.
+Every answer carries `X-Robots-Tag: noindex, nofollow` and
+`<meta name="robots" content="noindex, nofollow">`: the poster prints a page
+that is already indexed, so it is never listed itself.
+
+```bash
+curl -sI https://inmobiliaria.brotea.dev/propiedad/$ID/cartel | grep -i x-robots-tag   # noindex, nofollow
+curl -s -o /dev/null -w '%{http_code}\n' https://inmobiliaria.brotea.dev/propiedad/$DRAFT_ID/cartel   # 404
+```
+
+**The sheet.** Town and title, the first photo, price and facts, a QR, the
+URL it encodes in clear text, and the agency name plus the phone from
+`settings` (the phone line only appears when one is set; the price is
+rewritten in `negocio.moneda` like on the property page). No nav, no footer,
+always the light theme whatever the reader's system prefers. `@page` is
+`A4 portrait` with 12 mm margins; the photo shrinks so a long title never
+pushes the sheet onto a second page.
+
+**The QR** is drawn on the server as inline SVG by `qrSvg()` in
+`src/lib/poster.mjs` (library `uqr`, error correction M, 4-module quiet zone,
+`currentColor`), so printing needs no JavaScript and no image request, and
+the encoder never ships to the browser. It encodes the property page in the
+poster's language with `?origen=cartel`, built by `posterTarget()`; the
+`<svg>` names that URL in `data-qr`:
+
+```bash
+curl -s https://inmobiliaria.brotea.dev/en/propiedad/$ID/cartel | grep -o 'data-qr="[^"]*"'
+# data-qr="https://inmobiliaria.brotea.dev/en/propiedad/<id>?origen=cartel"
+```
+
+**Lead origin.** The lead form on the property page
+(`src/components/LeadForm.astro`, rules in `src/lib/lead-origin.mjs`) saves
+`origen: 'cartel'` only when the query is exactly `origen=cartel` (any other
+value or casing, or no query, is `'web'`: a URL anybody can type must not
+invent origins). An arrival through the poster is remembered per property in
+`sessionStorage` under `origen:<property id>`, so a reload or a detour to the
+catalogue and back in the same tab still records the lead as `cartel`. The
+chassis notification keeps `source: lead_web` and adds `(cartel)` to its
+text. `cartel` then shows up as its own origin in the weekly summary
+([docs/jobs.md](jobs.md#weekly-summary)).
+
+**Layout props.** To support the sheet, `src/layouts/Layout.astro` gained
+three optional props, all off by default so every other page is unchanged:
+`bare` (no nav and no footer), `robots` (emits `<meta name="robots">`) and
+`theme` (`'light' | 'dark'`, set as `data-theme` on `<html>`).
 
 ## Deuda consciente / siguiente iteración
 

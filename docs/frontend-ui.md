@@ -11,6 +11,8 @@ every internal href goes through `localePath()`. The full contract is in
 [docs/i18n.md](i18n.md); below only the UI-structure consequences. Since E3
 every property also has its own page, `/propiedad/<id>` — how it is served
 is in [docs/architecture.md](architecture.md#rendering-and-routes-e3-2026-09-23).
+Since 2026-09-24 it also has a printable poster, `/propiedad/<id>/cartel`
+([below](#printable-poster-srcpageslangpropiedadidcartelastro)).
 
 The palette, type scale and signature element ("el apunte de visita") come
 from feature 47 and live in `src/styles/identity.css`; they are documented
@@ -241,6 +243,37 @@ Its structure:
 
 Two columns above `68rem` (see the shell table); one column below, the
 phone layout.
+
+The lead form also decides `leads.origen` (`cartel` or `web`) from the URL
+and `sessionStorage`; the rule is in
+[docs/architecture.md](architecture.md#printable-poster-2026-09-24).
+
+## Printable poster (`src/pages/[...lang]/propiedad/[id]/cartel.astro`)
+
+`/propiedad/<id>/cartel` (and `/en/…`): one A4 sheet per published property.
+Status codes, `noindex`, the QR and the lead origin are in
+[docs/architecture.md](architecture.md#printable-poster-2026-09-24); its
+structure:
+
+- Mounted as `<Layout … bare robots="noindex, nofollow" theme="light">`: no
+  Nav, no Footer, light theme forced through `data-theme` on `<html>`.
+- `nav.acciones` (screen only, `display: none` in print): a `.volver` link
+  back to the property page (`poster.back`), a `[data-print]` button that
+  calls `window.print()` (`poster.print`) and a hint (`poster.hint`).
+- `<article class="cartel" data-propiedad={id}>`: `.cabecera` (eyebrow
+  `poster.eyebrow` + town, `h1` title clamped to 3 lines, 2 in print),
+  `.foto` (first photo), `.datos` (`.precio`, `.meta`), `.codigo` (the
+  server-rendered QR `<svg data-qr=…>`, `poster.scan`, the target URL in
+  clear text) and `footer.agencia` (`site.name` plus `[data-telefono]`,
+  filled with `poster.phone` only when `settings` has a phone).
+- Print: `@page { size: A4 portrait; margin: 12mm; }`, the article is a
+  fixed `271mm` grid whose photo row absorbs the slack, so the sheet never
+  spills onto a second page. Millimetres appear only in the print rules.
+- All copy is under the `poster.*` locale keys (`poster.title`,
+  `poster.qrLabel` for the QR's `aria-label`, and those above).
+
+`Layout.astro`'s `bare`, `robots` and `theme` props exist for this page and
+are off by default.
 
 ## Property photo gallery (`src/components/Gallery.astro`)
 
