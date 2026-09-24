@@ -7,6 +7,8 @@
 // with Intl.DateTimeFormat — never by adding fixed offsets (DST would
 // silently shift it twice a year).
 
+import { safeName } from './pb-helpers.lib.mjs'; // pure: no I/O in that function
+
 const MS_HOUR = 3_600_000;
 const MS_DAY = 24 * MS_HOUR;
 
@@ -157,9 +159,9 @@ export const recorta = (s) => escapeHtml(String(s).slice(0, MAX_NOMBRE));
 export function textoVisitas(visitas, now) {
   if (!visitas.length) return null;
   const lines = visitas.slice(0, MAX_LINES).map((v) => {
-    const lead = recorta(v.expand?.lead?.nombre || 'lead sin nombre');
+    const lead = recorta(safeName(v.expand?.lead?.nombre) || 'lead sin nombre');
     const propiedad = recorta(v.expand?.propiedad?.titulo || 'sin propiedad');
-    const agente = recorta(v.expand?.agente?.name || 'sin agente');
+    const agente = recorta(safeName(v.expand?.agente?.name) || 'sin agente');
     return `• ${horaMadrid(v.cuando)} · <b>${lead}</b> · ${propiedad} · ${agente}`;
   });
   if (visitas.length > MAX_LINES) lines.push(`… y ${visitas.length - MAX_LINES} más`);
@@ -464,8 +466,8 @@ export function esReciente(date, now, horas = 24) {
 export function textoShortlist(propiedad, cands, guardiaNombre, now) {
   if (!cands.length) return null;
   const lines = cands.slice(0, MAX_LINES).map(({ lead, motivos }) => {
-    const nombre = recorta(lead.nombre || 'lead sin nombre');
-    const asignado = lead.expand?.asignado?.name;
+    const nombre = recorta(safeName(lead.nombre) || 'lead sin nombre');
+    const asignado = safeName(lead.expand?.asignado?.name);
     const agente = asignado ? recorta(asignado) : guardiaNombre ? `${recorta(guardiaNombre)} (guardia)` : 'sin asignar';
     return `• <b>${nombre}</b> · ${agente} · ${motivos.map(escapeHtml).join(', ')}`;
   });

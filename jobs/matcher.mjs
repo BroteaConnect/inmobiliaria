@@ -11,6 +11,7 @@
 // of scope until E5 ships its outbound template: a business-initiated message
 // needs a Twilio Content template or the lead's own 24-hour window.
 import { candidatos, esReciente, normalizarLeads, textoShortlist, vocabularioZonas } from './lib.mjs';
+import { onDutyName } from './pb-helpers.lib.mjs';
 
 export const when = { daily: '09:30' };
 
@@ -21,22 +22,6 @@ const SHORTLIST_IDS = 10; // lead ids kept in the event payload
 // are stateless and see no event history; docs/jobs.md says so).
 const VENTANA_HORAS = 24 + 6;
 
-// Who is on duty: settings row `agentes.guardia` = { v: 1, text: <users id> }.
-// Anything missing or broken degrades to null (the line then says
-// "sin asignar"), never to a failed morning.
-async function nombreDeGuardia(pb, log) {
-  try {
-    const rows = await pb.collection('settings').getFullList({ filter: 'key = "agentes.guardia"' });
-    const id = rows[0]?.value?.text;
-    if (!id) return null;
-    const user = await pb.collection('users').getOne(id);
-    return user?.name || null;
-  } catch (e) {
-    log(`matcher: on-duty agent unavailable: ${e?.message ?? e}`);
-    return null;
-  }
-}
-
 export async function run({ pb, notify, event, log, now }) {
   // Every property builds the zone vocabulary; only the published ones are scored.
   const todas = await pb.collection('propiedades').getFullList({ sort: '-updated' });
@@ -46,7 +31,7 @@ export async function run({ pb, notify, event, log, now }) {
     filter: 'etapa != "vendido"',
     expand: 'propiedad,asignado',
   });
-  const guardia = await nombreDeGuardia(pb, log);
+  const guardia = await onDutyName(pb, log, 'matcher');
   const leadsNorm = normalizarLeads(leads, zonas);
   log(`matcher: ${publicadas.length} published of ${todas.length} properties, ${leads.length} open lead(s), ${zonas.length} zone(s), on-duty agent ${guardia ? 'resolved' : 'unknown'}`);
 
