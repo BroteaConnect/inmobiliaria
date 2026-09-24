@@ -28,6 +28,10 @@ aislamiento de fallos, reintentos) es del chasis y no se copia.
 | `jobs/resumen.mjs` | 20:00 | Resumen del día: leads nuevos, importados a la cartera, contactos salientes por canal, mensajes entrantes, emails entregados y propiedades publicadas. |
 | `jobs/campanas.mjs` | hourly | Only when a campaign pauses or completes (see [campanas](#campanas)). |
 | `jobs/matcher.mjs` | 09:30 | Shortlist de leads que encajan con cada propiedad publicada o tocada en las últimas 24 h (ver [matcher](#matcher)). |
+| `jobs/unanswered.mjs` | hourly | A lead whose WhatsApp/email has waited more than **2 h** with no outbound row, once per unanswered streak, 09:00–21:00 only (see [unanswered](#unanswered)). |
+| `jobs/weekly-summary.mjs` | Fri 18:00 | The business summary of the week, never silent (see [weekly-summary](#weekly-summary)). |
+| `jobs/reactivation.mjs` | Mon 10:00 | A **proposal**: dormant leads that fit the published stock, for an agent to call. Nothing is sent to the leads (see [reactivation](#reactivation)). |
+| `jobs/owner-report.mjs` | 10:00, first weekday of the month (days 1–7) | **Drafts** of the monthly owner report for the previous month, for review. Nothing is sent to owners (see [owner-report](#owner-report)). |
 
 **El silencio es una feature**: si no hay leads desatendidos o el día está
 vacío, no se envía nada. Un canal que solo habla cuando hay algo que decir
@@ -149,6 +153,138 @@ business-initiated WhatsApp message needs a Twilio Content template (or the
 lead's own 24-hour window, which a lead who wrote weeks ago no longer has);
 that template is E5's deliverable, and the matcher will call it from there.
 
+## unanswered
+
+`jobs/unanswered.mjs` (hourly; rules in `jobs/unanswered.lib.mjs`) reads the
+last 48 h of `actividades` and, per lead, oldest first: an outbound row of
+**any** tipo (a `nota` typed as `saliente` included) closes the streak — except
+a failed send (`estado_envio = 'error'`, what the WhatsApp agent writes when
+Twilio refuses), which reached nobody — and
+the first inbound `whatsapp`/`email` after it opens the next one. That first
+inbound is the **anchor**: one alert per unanswered streak, however many
+messages the lead sends while waiting. An anchor between 2 h and 24 h old is
+alerted; an older one is the 09:00 agenda's job. An inbound `llamada` opens
+no streak (a lead does not call in through the CRM). No stage or consent
+exclusion; the lead in job secret `CAMPAIGN_REPORT_LEAD_ID` (the manager) is
+never alerted.
+
+The 48 h re-anchor (a known limit, chosen over one extra query per lead every
+hour): the job does not look up each lead's last outbound, it reads 48 h. A
+lead nobody answered for more than 48 h has their old inbound out of view, so
+the next message they send becomes a new anchor and is alerted again — a
+second reminder every two days for a lead who keeps writing into the void.
+
+- Log line, always (the E6 gate reads it): `unanswered: <n> lead(s) waiting over 2h`.
+- Quiet hours: alerts go out only 09:00–21:00 Madrid. Outside, the job logs
+  `unanswered: holding <k> alert(s) until 09:00` and writes nothing; the
+  first run after 09:00 sends them.
+- Order: **the Telegram message first** (lead first name, channel, wait,
+  assigned agent → on-duty agent → "sin asignar"), then the marker, then one
+  `lead.unanswered_alert` `{lead_id, activity_id, waited_min}` event per
+  alerted lead. Deliberately the reverse of the other jobs: the events are the
+  E6 gate's proof that an alert went out, so they only exist after a
+  successful send, and a lost alert is worse than a duplicate one.
+- Names in every E6 message go through `safeName()` (`pb-helpers.lib.mjs`):
+  an email address or a phone-shaped digit run never reaches the topic — the
+  on-duty agent's `users.name` is their login address today.
+- Marker: settings row `jobs.unanswered` = `{v: 1, alerted: {<activity id>:
+  <ISO>}}`, pruned to 7 days — the anchors already alerted. Under
+  `--dry-run` it is not written (the job logs `dry-run: would write
+  jobs.unanswered`).
+
+## weekly-summary
+
+`jobs/weekly-summary.mjs` (Fridays 18:00, `when = { daily: '18:00', dow: [5]
+}`; rules in `jobs/weekly-summary.lib.mjs`) covers Friday 18:00 → Friday
+18:00 on the Madrid wall clock — seven local days, 167 or 169 hours on a DST
+week. A run before Friday 18:00 (a forced rehearsal) reports the last complete
+week. `semana` is the ISO week of the closing Friday (`2026-W39`).
+
+- Counts: `leads_nuevos` (created in the week, `histórico` excluded — those
+  are `importados`), `por_origen` (empty → `sin origen`, keys cut to 40;
+  `cartel` is one more origin; the top 6 plus an `otros` count, in the event
+  and the text alike), `contactos` / `contactos_por_canal` (outbound rows,
+  notes and failed sends excluded), `entrantes`, `visitas` (held: `cuando` in the week
+  and `realizada`), `visitas_agendadas` (booked in the week, not cancelled),
+  `visitas_no_show`, `publicadas` (published and touched in the week — a
+  proxy), `envios` `{total, por_estado}` (null when the ledger could not be
+  read), `sin_respuesta` (the unanswered rule, now) and `embudo` (leads per
+  stage **today**).
+- **No stage history**: the CRM keeps only a lead's current `etapa`, so the
+  summary cannot say "3 leads moved to oferta this week"; the funnel is a
+  snapshot. A stage-move metric needs a stage-change log first.
+- Log line, always: `weekly-summary: <n> new lead(s) this week`; then the
+  `project.weekly_summary` `{semana, desde, hasta, …counts}` event, then the
+  message. A quiet week is said (`Semana sin movimiento…`), never skipped.
+  It writes nothing to PocketBase.
+
+## reactivation
+
+`jobs/reactivation.mjs` (Mondays 10:00; rules in `jobs/reactivation.lib.mjs`)
+proposes, to the team only, which dormant leads fit the stock published
+today. It never sends to a lead, never calls the chassis, never writes to
+PocketBase and never emits `reactivation.sent` — decision 3 of the estate
+build-out: no message to real leads before CU-15 has run and the owner said
+yes.
+
+- Dormant: `etapa` not in `oferta`/`reservado`/`vendido`, and no contact
+  (`ultimo_contacto || created`) for more than 30 days — an unknown date is
+  dormant. A lead with **any** `actividades` row in the last 30 days (an
+  inbound message included — `ultimo_contacto` is not stamped on inbound) is
+  not dormant. A revoked consent (`consentimiento` false with a
+  `consentimiento_en`) is out; a never-given one stays, marked 🚫 (a call
+  needs no marketing consent).
+- Fit: the matcher's `candidatos()` over the **published** properties (zone
+  vocabulary from all of them). Per lead: the best property, how many more
+  fit (`(+k)`) and the reasons. Best score first, then longest silence;
+  10 lines + "… y N más". Lead first name only.
+- Log line, always: `reactivation: <n> dormant lead(s) fit published stock`.
+  With n > 0: `reactivation.proposed` `{leads, properties, with_consent}`,
+  then the message. With n = 0: nothing else.
+
+## owner-report
+
+`jobs/owner-report.mjs` (daily 10:00; rules in `jobs/owner-report.lib.mjs`)
+acts on the first Madrid weekday within the first 7 days of the month, once
+per month, and drafts the report of the **previous** month: one draft per
+(owner, published property), rendered from the live `plantillas` row
+`propietario.informe` (`cuerpo_es`, with `render()` from `campanas.lib.mjs`).
+Nothing is sent to an owner — no chassis call, no `owner_report.sent` —
+until Meta approves the template and the jobs hold their chassis secret.
+
+- Per draft: `contactos` (leads whose `propiedad` is the property, created in
+  the month, `histórico` excluded), `visitas` (held in the month), plus
+  `visitas_agendadas`, `visitas_no_show` and `actividad` for the agent's
+  eyes; `agente` = the on-duty agent, else "el equipo"; `mes` in Spanish;
+  owner first name only; title cut to 60. A draft is flagged `no enviable:
+  sin teléfono` / `sin consentimiento` when it could not be sent anyway.
+- Missing template: the variables are shown instead; the job does not fail.
+- Log line: `owner-report: <n> draft(s) for <YYYY-MM>`. With drafts: the
+  `owner_report.drafted` `{count, month, owners, not_sendable}` event, then
+  every message (split under 3900 chars, never inside a draft), then the
+  marker — a send that fails half-way leaves the month unmarked, to be
+  drafted again. With none: only the marker.
+- Marker: settings row `jobs.owner_report` = `{v: 1, last_month: 'YYYY-MM'}`.
+  Under `--dry-run` the calendar/marker verdict is logged but bypassed (a
+  rehearsal always shows drafts) and the marker is not written.
+
+## State the jobs keep (settings rows)
+
+| Key | Value | Written by |
+|---|---|---|
+| `jobs.unanswered` | `{v: 1, alerted: {<actividades id>: <ISO>}}`, 7 days | `unanswered` |
+| `jobs.owner_report` | `{v: 1, last_month: 'YYYY-MM'}` | `owner-report` |
+
+Both are written only outside `--dry-run`, and only after the job's
+Telegram message(s). A missing row reads as "no marker yet"; a row that
+cannot be **read** (any error but a 404) fails the run, so the runner retries
+instead of re-alerting every streak or re-sending the month's drafts.
+Deleting a row is safe: `unanswered` may repeat an alert for a streak still
+open, `owner-report` may draft the month again.
+
+Every E6 message passes through `fitTelegram()` (`lib.mjs`): over 4000 chars
+it becomes its first line, a note and the CRM footer, never a failed send.
+
 ## campanas
 
 `jobs/campanas.mjs` (hourly, I/O only) advances every `campanas` row in
@@ -218,6 +354,13 @@ that template is E5's deliverable, and the matcher will call it from there.
   una fila inofensiva, no un mensaje de Telegram.
 - Exception: `campanas` does write its own `campanas` row (never a lead), and
   under `--dry-run` every write and every chassis call is skipped and logged.
+- Exceptions too: `unanswered` and `owner-report` write their own settings
+  marker (see [State the jobs keep](#state-the-jobs-keep-settings-rows)),
+  never under `--dry-run`. `project.weekly_summary`, `reactivation.proposed`
+  and `owner_report.drafted` are written before `notify()`, like the others;
+  `lead.unanswered_alert` is written **after** it (see
+  [unanswered](#unanswered)). `jobs/e6-runs.test.mjs` runs each E6 job
+  against a fake PocketBase and asserts zero writes under `dryRun`.
 
 Para añadir o modificar un job, usa la skill `jobs`
 (`.claude/skills/jobs/SKILL.md`), que documenta el contrato del módulo.
