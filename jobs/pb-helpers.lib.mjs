@@ -27,8 +27,7 @@ const SETTINGS_KEY = /^[a-z0-9._]+$/;
 
 /**
  * Name of the on-duty agent: settings row `agentes.guardia` = { v: 1, text:
- * <users id> }. A copy of matcher.mjs's nombreDeGuardia (the matcher is left
- * untouched). Missing, broken or unreadable → null, logged under `tag`.
+ * <users id> }. Shared by the matcher and the E6 jobs. Missing, broken or unreadable → null, logged under `tag`.
  */
 export async function onDutyName(pb, log, tag) {
   try {

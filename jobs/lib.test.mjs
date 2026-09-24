@@ -313,6 +313,16 @@ describe('textoVisitas', () => {
     assert.match(txt, /^• 10:05 · <b>Ana<\/b> · Ático en Ruzafa · Luis$/m);
   });
 
+  it('never prints a login email or a phone number as a name', () => {
+    const v = visita({
+      cuando: '2026-07-30 08:05:00.000Z',
+      expand: { lead: { nombre: '+34 600 123 456' }, propiedad: { titulo: 'Ático' }, agente: { name: 'luis.garcia@agencia.es' } },
+    });
+    const txt = textoVisitas(visitasDeHoy([v], NOW), NOW);
+    assert.match(txt, /^• 10:05 · <b>lead sin nombre<\/b> · Ático · luis\.garcia$/m);
+    assert.doesNotMatch(txt, /@|600/);
+  });
+
   it('shows midnight as 00:MM, not 24:MM', () => {
     const v = visita({ cuando: '2026-07-29 22:10:00.000Z' }); // 00:10 CEST
     assert.match(textoVisitas([v], NOW), /• 00:10 · /);
@@ -711,6 +721,16 @@ describe('textoShortlist', () => {
     assert.match(txt, /<b>Encaje<\/b> — .* · Piso en Chamberí \(Chamberí\) · 1 candidato:/);
     assert.match(txt, /^• <b>Ana<\/b> · Luis · zona chamberi, presupuesto sin indicar, habitaciones sin indicar$/m);
     assert.ok(txt.endsWith(PIE_CRM));
+  });
+
+  it('strips a login email from the assigned and the on-duty agent alike', () => {
+    const asignado = shortlist([lead({ nombre: 'Ana', mensaje: 'Chamberí', expand: { asignado: { name: 'luis@agencia.es' } } })]);
+    assert.match(asignado, /^• <b>Ana<\/b> · luis · /m);
+    const email = shortlist([lead({ nombre: 'Ana', mensaje: 'Chamberí', expand: { asignado: { name: 'x@y.es' } } })]);
+    assert.doesNotMatch(email, /@/);
+    // an assigned name that is ONLY an address falls back to the on-duty agent
+    const soloEmail = shortlist([lead({ nombre: 'Ana', mensaje: 'Chamberí', expand: { asignado: { name: '@y.es' } } })], 'Marta');
+    assert.match(soloEmail, /· Marta \(guardia\) · /);
   });
 
   it('falls back to the on-duty agent, then to "sin asignar"', () => {
