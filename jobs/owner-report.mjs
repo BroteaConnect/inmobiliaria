@@ -9,7 +9,7 @@
 // PocketBase write is the job's own settings row `jobs.owner_report`
 // ({ v: 1, last_month }), skipped under --dry-run. Under --dry-run the
 // calendar and marker verdict is logged but bypassed, so a rehearsal always
-// shows the drafts. Order: event → marker → notify.
+// shows the drafts. Order: event → every message → marker.
 import { MARKER_KEY, TEMPLATE_KEY, ownerReports, reportDue, textOwnerReports } from './owner-report.lib.mjs';
 import { monthNameEs } from './madrid.lib.mjs';
 import { onDutyName, readMarker, writeMarker } from './pb-helpers.lib.mjs';
@@ -74,7 +74,9 @@ export async function run({ pb, notify, event, log, now, dryRun }) {
     owners: new Set(drafts.map((d) => d.propietario_id)).size,
     not_sendable: drafts.filter((d) => d.no_enviable.length).length,
   });
-  await writeMarker(pb, MARKER_KEY, newMarker, dryRun, log);
+  // Every chunk before the marker: a send that fails half-way leaves the
+  // month unmarked, so the next run drafts it again instead of losing half.
   for (const chunk of textOwnerReports(drafts, template, monthNameEs(month))) await notify(chunk);
+  await writeMarker(pb, MARKER_KEY, newMarker, dryRun, log);
   return `${drafts.length} draft(s) for ${month}`;
 }

@@ -8,7 +8,7 @@
 //
 // The fit is the matcher's (lib.mjs candidatos: zone required; budget and
 // rooms reorder), scored against the dormant leads only.
-import { MAX_LINES, PIE_CRM, candidatos, esFecha, escapeHtml, firstName, haceCuanto, recorta, relojLead } from './lib.mjs';
+import { MAX_LINES, PIE_CRM, candidatos, esFecha, escapeHtml, firstName, fitTelegram, haceCuanto, recorta, relojLead } from './lib.mjs';
 import { safeName } from './pb-helpers.lib.mjs';
 
 const MS_DAY = 86_400_000;
@@ -25,8 +25,11 @@ export const consentRevoked = (lead) => !lead.consentimiento && Boolean(lead.con
  * than DORMANT_DAYS (an unknown date counts as dormant — the most abandoned
  * case), and not revoked. A lead that never consented stays in (a phone call
  * needs no marketing consent); the message marks it.
+ * `activeLeadIds`: leads with ANY actividades row (inbound included) in the
+ * last DORMANT_DAYS — they are not dormant, whatever ultimo_contacto says
+ * (it is not stamped on an inbound message).
  */
-export function dormantLeads(leads, now) {
+export function dormantLeads(leads, now, { activeLeadIds = new Set() } = {}) {
   const since = (l) => {
     const d = relojLead(l);
     return esFecha(d) ? d.getTime() : -Infinity;
@@ -34,6 +37,7 @@ export function dormantLeads(leads, now) {
   return leads
     .filter((l) => !ACTIVE_STAGES.includes(l.etapa))
     .filter((l) => !consentRevoked(l))
+    .filter((l) => !activeLeadIds.has(l.id))
     .filter((l) => now - since(l) > DORMANT_DAYS * MS_DAY)
     .sort((a, b) => since(a) - since(b));
 }
@@ -78,12 +82,12 @@ export function textReactivation(proposals, onDuty, now) {
   });
   if (proposals.length > MAX_LINES) lines.push(`… y ${proposals.length - MAX_LINES} más`);
   const n = proposals.length;
-  return [
+  return fitTelegram([
     `💤 <b>Reactivación</b> — ${n} ${n === 1 ? 'lead dormido encaja' : 'leads dormidos encajan'} con el stock publicado:`,
     '',
     ...lines,
     '',
     'Propuesta para llamar: no se ha enviado nada a los leads.',
     PIE_CRM,
-  ].join('\n');
+  ].join('\n'));
 }

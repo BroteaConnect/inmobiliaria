@@ -4,9 +4,14 @@
 //
 // Safety: this job never writes to a lead and never sends anything to one. Its
 // one PocketBase write is its own settings row `jobs.unanswered` (the anchors
-// already alerted), skipped under --dry-run. Order: events → marker → notify,
-// so a retry after a partial failure repeats a harmless row, not a Telegram
-// message. Outside 09:00–21:00 Madrid the alerts are held (nothing is written)
+// already alerted), skipped under --dry-run.
+//
+// Order: notify → marker → events — deliberately the reverse of the other
+// jobs' "event first, notify last". Here the lead.unanswered_alert events are
+// the E6 gate's proof that an alert WENT OUT, so they may only exist after a
+// successful send; and a lost alert (a lead left waiting) is worse than a
+// duplicate one (a retry after a failed marker write re-sends the message).
+// Outside 09:00–21:00 Madrid the alerts are held (nothing is written)
 // and go out at the first run after 09:00 — still unanswered, still unalerted.
 import {
   FETCH_HOURS, MARKER_KEY, dueAlerts, insideAlertHours, markAlerted, pruneMarker, textUnanswered, unansweredStreaks,
@@ -45,10 +50,10 @@ export async function run({ pb, notify, event, log, now, dryRun, env }) {
   const leadsById = new Map(leads.map((l) => [l.id, l]));
   const onDuty = await onDutyName(pb, log, 'unanswered');
 
+  await notify(textUnanswered(due, leadsById, onDuty));
+  await writeMarker(pb, MARKER_KEY, markAlerted(marker, due, now), dryRun, log);
   for (const s of due) {
     await event('lead.unanswered_alert', { lead_id: s.lead_id, activity_id: s.activity_id, waited_min: s.waited_min });
   }
-  await writeMarker(pb, MARKER_KEY, markAlerted(marker, due, now), dryRun, log);
-  await notify(textUnanswered(due, leadsById, onDuty));
   return `${due.length} alerted`;
 }

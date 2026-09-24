@@ -6,6 +6,7 @@
 // writeMarker(), takes dryRun explicitly and refuses to write under it, and
 // every read that is not essential to a job degrades to null instead of
 // throwing: a rehearsal that crashes on a missing settings row fails a gate.
+// The marker is the exception: absent is null, unreadable is an error.
 
 /**
  * A person's name as the team's topic may show it: no email address and no
@@ -48,12 +49,22 @@ async function markerRow(pb, key) {
   return rows[0] ?? null;
 }
 
-/** The `value` of the settings row `key`, or null when absent or on any error. */
+// A 404 (the SDK's `status`, or the runner client's "→ 404" message) means
+// the row or the collection is not there: that is "no marker yet".
+const isNotFound = (e) => e?.status === 404 || / → 404\b/.test(String(e?.message ?? ''));
+
+/**
+ * The `value` of the settings row `key`, or null when the row is absent.
+ * Any other error is rethrown: a marker that could not be READ is not an
+ * empty marker — treating it as one would re-alert every open streak or
+ * re-send the month's drafts. The run fails and the runner retries.
+ */
 export async function readMarker(pb, key) {
   try {
     return (await markerRow(pb, key))?.value ?? null;
-  } catch {
-    return null;
+  } catch (e) {
+    if (isNotFound(e)) return null;
+    throw e;
   }
 }
 

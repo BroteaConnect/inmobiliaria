@@ -7,7 +7,7 @@ import {
 } from './unanswered.lib.mjs';
 import { addDays, madridParts, madridWallTime, monthNameEs, previousMonth } from './madrid.lib.mjs';
 import { onDutyName, readMarker, safeName, writeMarker } from './pb-helpers.lib.mjs';
-import { MAX_LINES, PIE_CRM, firstName } from './lib.mjs';
+import { MAX_LINES, MAX_MESSAGE_CHARS, PIE_CRM, firstName, fitTelegram } from './lib.mjs';
 
 // 2026-09-23 12:00 Madrid (CEST, UTC+2) = 10:00Z.
 const NOW = new Date('2026-09-23T10:00:00.000Z');
@@ -48,6 +48,11 @@ describe('unansweredStreaks', () => {
       act('l1', { tipo: 'nota', direccion: 'saliente', created: minAgo(200) }),
     ], NOW);
     assert.deepEqual(out, []);
+  });
+  it('a failed send is not a reply', () => {
+    const inbound = act('l1', { created: minAgo(300) });
+    const out = unansweredStreaks([inbound, act('l1', { direccion: 'saliente', estado_envio: 'error', created: minAgo(200) })], NOW);
+    assert.deepEqual(out.map((s) => s.activity_id), [inbound.id]);
   });
   it('an inbound llamada opens no streak', () => {
     assert.deepEqual(unansweredStreaks([act('l1', { tipo: 'llamada', created: minAgo(300) })], NOW), []);
@@ -125,10 +130,11 @@ describe('textUnanswered', () => {
     assert.equal(textUnanswered([], new Map(), null), null);
   });
   it('names the lead, channel, wait and assigned agent, escaped', () => {
-    const leads = new Map([['l1', { id: 'l1', nombre: 'Ana <b>', expand: { asignado: { name: 'Luis' } } }]]);
+    const leads = new Map([['l1', { id: 'l1', nombre: 'Ana<b> Pérez', expand: { asignado: { name: 'Luis' } } }]]);
     const t = textUnanswered(alerts, leads, 'Marta');
     assert.match(t, /^⏰ <b>Sin respuesta<\/b> — 1 lead lleva más de 2 h esperando:/);
-    assert.match(t, /• <b>Ana &lt;b&gt;<\/b> · WhatsApp · 2 h 15 min \(desde las \d\d:\d\d\) · Luis/);
+    assert.doesNotMatch(t, /Pérez/);
+    assert.match(t, /• <b>Ana&lt;b&gt;<\/b> · WhatsApp · 2 h 15 min \(desde las \d\d:\d\d\) · Luis/);
     assert.ok(t.endsWith(`Si ya contestaste fuera del CRM, regístralo allí.\n${PIE_CRM}`));
   });
   it('falls back to the on-duty agent, then to "sin asignar"', () => {
@@ -141,6 +147,24 @@ describe('textUnanswered', () => {
     const t = textUnanswered(many, new Map(), null);
     assert.match(t, /13 leads llevan/);
     assert.match(t, /… y 3 más/);
+  });
+});
+
+describe('fitTelegram', () => {
+  it('leaves a short message alone and shortens a long one', () => {
+    assert.equal(fitTelegram('hola'), 'hola');
+    assert.equal(fitTelegram(null), null);
+    const long = `cabecera\n${'x'.repeat(5000)}`;
+    const t = fitTelegram(long);
+    assert.ok(t.length <= MAX_MESSAGE_CHARS);
+    assert.ok(t.startsWith('cabecera\n'));
+    assert.ok(t.endsWith(PIE_CRM));
+  });
+  it('the unanswered alert never exceeds the limit', () => {
+    const alerts = Array.from({ length: 10 }, (_, i) => ({ lead_id: `l${i}`, activity_id: `a${i}`, tipo: 'x'.repeat(2000), created: minAgo(130), waited_min: 130 }));
+    const t = textUnanswered(alerts, new Map(), 'y'.repeat(2000));
+    assert.ok(t.length <= MAX_MESSAGE_CHARS);
+    assert.match(t, /^⏰ <b>Sin respuesta<\/b>/);
   });
 });
 
@@ -178,7 +202,7 @@ const fakePb = ({ rows = [], fail = false } = {}) => {
   return {
     calls,
     collection: (name) => ({
-      getFullList: async (opts) => { calls.push(['list', name, opts?.filter]); if (fail) throw new Error('down'); return rows; },
+      getFullList: async (opts) => { calls.push(['list', name, opts?.filter]); if (fail) throw (fail instanceof Error ? fail : new Error('down')); return rows; },
       getOne: async (id) => { calls.push(['getOne', name, id]); if (fail) throw new Error('down'); return { id, name: 'Marta' }; },
       create: async (body) => { calls.push(['create', name, body]); return body; },
       update: async (id, body) => { calls.push(['update', name, id, body]); return body; },
@@ -217,11 +241,15 @@ describe('pb-helpers', () => {
     await writeMarker(present, 'jobs.unanswered', { v: 1 }, false, () => {});
     assert.deepEqual(present.calls.at(-1), ['update', 'settings', 'abc123', { value: { v: 1 } }]);
   });
-  it('readMarker degrades to null', async () => {
-    assert.equal(await readMarker(fakePb({ fail: true }), 'jobs.unanswered'), null);
+  it('readMarker: absent is null, unreadable is an error', async () => {
     assert.equal(await readMarker(fakePb(), 'jobs.unanswered'), null);
     assert.deepEqual(await readMarker(fakePb({ rows: [{ value: { v: 1 } }] }), 'jobs.unanswered'), { v: 1 });
-    assert.equal(await readMarker(fakePb(), 'bad key"'), null);
+    const notFound = fakePb({ fail: Object.assign(new Error('PocketBase GET /x → 404 {}'), {}) });
+    assert.equal(await readMarker(notFound, 'jobs.unanswered'), null);
+    assert.equal(await readMarker(fakePb({ fail: Object.assign(new Error('nope'), { status: 404 }) }), 'jobs.unanswered'), null);
+    await assert.rejects(readMarker(fakePb({ fail: true }), 'jobs.unanswered'), /down/);
+    await assert.rejects(readMarker(fakePb({ fail: new Error('PocketBase GET /x → 500 {}') }), 'jobs.unanswered'), /500/);
+    await assert.rejects(readMarker(fakePb(), 'bad key"'), /not a settings key/);
   });
   it('onDutyName degrades to null and never puts a non-id in a URL', async () => {
     assert.equal(await onDutyName(fakePb({ fail: true }), () => {}, 't'), null);

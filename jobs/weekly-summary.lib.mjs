@@ -7,12 +7,14 @@
 // an import is not lead generation, a note is not a contact. There is no
 // stage history in the CRM, so the funnel is today's snapshot, never "moved
 // from visita to oferta this week".
-import { ORIGEN_IMPORTADO, PIE_CRM, escapeHtml, esFecha, parseFecha } from './lib.mjs';
+import { ORIGEN_IMPORTADO, PIE_CRM, escapeHtml, esFecha, fitTelegram, parseFecha } from './lib.mjs';
 import { addDays, madridParts, madridWallTime } from './madrid.lib.mjs';
 import { unansweredStreaks } from './unanswered.lib.mjs';
 
 export const CLOSE_DOW = 5; // Friday
 export const CLOSE_HOUR = 18;
+export const TOP_ORIGINS = 6; // the rest is one "otros" count, in the payload and the text
+export const OTHERS = 'otros';
 export const MAX_KEY = 40; // an origen comes from a form or an import: cut before it becomes a key
 export const ETAPAS = ['nuevo', 'contactado', 'visita', 'oferta', 'reservado', 'vendido', 'nutriendo'];
 
@@ -54,6 +56,16 @@ const tally = (items, keyOf) => {
   }
   return Object.fromEntries([...m].sort((a, b) => b[1] - a[1]));
 };
+// The TOP_ORIGINS biggest buckets (tally is already sorted), the rest summed
+// under OTHERS — merged with a real origin literally called "otros".
+export function capOrigins(counts) {
+  const entries = Object.entries(counts);
+  if (entries.length <= TOP_ORIGINS) return counts;
+  const top = new Map(entries.slice(0, TOP_ORIGINS));
+  const rest = entries.slice(TOP_ORIGINS).reduce((n, [, c]) => n + c, 0);
+  top.set(OTHERS, (top.get(OTHERS) || 0) + rest);
+  return Object.fromEntries(top);
+}
 const bucket = (s, empty) => String(s ?? '').trim().slice(0, MAX_KEY) || empty;
 
 /**
@@ -69,7 +81,8 @@ export function weeklySummary({ leads = [], actividades = [], visitas = [], prop
   const leadsW = leads.filter((l) => inW(l.created));
   const nuevos = leadsW.filter((l) => l.origen !== ORIGEN_IMPORTADO);
   const actsW = actividades.filter((a) => inW(a.created));
-  const salientes = actsW.filter((a) => a.direccion === 'saliente' && a.tipo !== 'nota');
+  // A failed send (estado_envio 'error') reached nobody: not a contact.
+  const salientes = actsW.filter((a) => a.direccion === 'saliente' && a.tipo !== 'nota' && a.estado_envio !== 'error');
   const contactos_por_canal = tally(salientes, (a) => bucket(a.tipo, 'sin canal'));
   const envios_w = envios ? envios.filter((e) => inW(e.created)) : null;
   const embudoAll = tally(allLeads, (l) => bucket(l.etapa, 'sin etapa'));
@@ -84,7 +97,7 @@ export function weeklySummary({ leads = [], actividades = [], visitas = [], prop
     hasta: hastaDay,
     leads_nuevos: nuevos.length,
     importados: leadsW.length - nuevos.length,
-    por_origen: tally(nuevos, (l) => bucket(l.origen, 'sin origen')),
+    por_origen: capOrigins(tally(nuevos, (l) => bucket(l.origen, 'sin origen'))),
     contactos: salientes.length,
     contactos_por_canal,
     entrantes: actsW.filter((a) => a.direccion === 'entrante').length,
@@ -123,12 +136,12 @@ export function textWeeklySummary(s) {
   if (s.sin_respuesta) lines.push(`• ⏰ Ahora mismo, ${s.sin_respuesta} ${s.sin_respuesta === 1 ? 'lead espera' : 'leads esperan'} respuesta desde hace más de 2 h`);
   const embudo = Object.entries(s.embudo).map(([e, n]) => `${escapeHtml(e)} ${n}`).join(' · ');
   if (embudo) lines.push('', `Embudo hoy: ${embudo}`);
-  return [
+  return fitTelegram([
     `📊 <b>Resumen de la semana</b> — ${s.semana.replace(/^\d{4}-W0?/, 'semana ')} · ${shortDay(s.desde)} → ${shortDay(s.hasta)}:`,
     '',
     ...lines,
     '',
     PIE_CRM,
-  ].join('\n');
+  ].join('\n'));
 }
 

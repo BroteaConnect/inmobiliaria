@@ -68,6 +68,17 @@ export const firstName = (nombre) => String(nombre ?? '').trim().split(/\s+/)[0]
 // The one call to action every digest ends with (agenda and shortlist alike).
 export const PIE_CRM = 'Abre el CRM y dales salida: https://crm-inmobiliaria.brotea.dev';
 
+// Telegram refuses a message over 4096 chars, after the event row is already
+// written. Every capped digest still passes through here: over MAX_MESSAGE_CHARS
+// it becomes its first line, a note and the CRM footer — shorter news, never
+// a lost one.
+export const MAX_MESSAGE_CHARS = 4000;
+export function fitTelegram(text) {
+  if (text == null || text.length <= MAX_MESSAGE_CHARS) return text;
+  const head = text.split('\n')[0].slice(0, 1000);
+  return [head, '', 'El detalle no cabe en un mensaje de Telegram: míralo en el CRM.', PIE_CRM].join('\n');
+}
+
 // "hace 3 días" / "hace 1 día" / "hace 5 horas" / "hace menos de una hora"
 export function haceCuanto(date, now) {
   const d = parseFecha(date);

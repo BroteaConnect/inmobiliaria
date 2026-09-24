@@ -7,7 +7,18 @@
 // streak, and the FIRST inbound whatsapp/email after it opens the next one.
 // That first inbound is the anchor: one alert per unanswered streak, however
 // many messages the lead sends while waiting.
-import { MAX_LINES, PIE_CRM, esFecha, horaMadrid, parseFecha, recorta } from './lib.mjs';
+//
+// A failed send is not a reply: an outbound row with estado_envio 'error'
+// (whatsapp/src/tools.js writes one when Twilio refuses) is skipped, so the
+// lead is still waiting.
+//
+// The 48 h re-anchor (a known, documented limit): the job reads 48 h of rows,
+// not each lead's last outbound. A lead nobody answered for more than 48 h
+// has its old inbound out of view, so the next message they send becomes a
+// new anchor and is alerted again (the marker only knows activity ids). That
+// is a second reminder every two days for a lead who keeps writing into the
+// void — accepted rather than one extra query per lead every hour.
+import { MAX_LINES, PIE_CRM, fitTelegram, esFecha, firstName, horaMadrid, parseFecha, recorta } from './lib.mjs';
 import { madridParts } from './madrid.lib.mjs';
 import { safeName } from './pb-helpers.lib.mjs';
 
@@ -38,7 +49,9 @@ export function unansweredStreaks(actividades, now, { excludeLeadIds = [] } = {}
     .sort((x, y) => x.t - y.t);
   for (const { a, t } of rows) {
     const lead = String(a.lead);
-    if (a.direccion === 'saliente') byLead.set(lead, null);
+    if (a.direccion === 'saliente') {
+      if (a.estado_envio !== 'error') byLead.set(lead, null);
+    }
     else if (a.direccion === 'entrante' && INBOUND_TIPOS.includes(a.tipo) && !byLead.get(lead)) {
       byLead.set(lead, { a, t });
     }
@@ -103,7 +116,7 @@ export function textUnanswered(alerts, leadsById, onDuty) {
   if (!alerts.length) return null;
   const lines = alerts.slice(0, MAX_LINES).map((s) => {
     const lead = leadsById.get(s.lead_id);
-    const nombre = recorta(safeName(lead?.nombre) || 'lead sin nombre');
+    const nombre = recorta(firstName(safeName(lead?.nombre)) || 'lead sin nombre');
     const asignado = safeName(lead?.expand?.asignado?.name);
     const agente = asignado ? recorta(asignado) : onDuty ? `${recorta(onDuty)} (guardia)` : 'sin asignar';
     const canal = CANAL[s.tipo] ?? recorta(s.tipo || 'canal desconocido');
@@ -111,12 +124,12 @@ export function textUnanswered(alerts, leadsById, onDuty) {
   });
   if (alerts.length > MAX_LINES) lines.push(`… y ${alerts.length - MAX_LINES} más`);
   const n = alerts.length;
-  return [
+  return fitTelegram([
     `⏰ <b>Sin respuesta</b> — ${n} ${n === 1 ? 'lead lleva' : 'leads llevan'} más de 2 h esperando:`,
     '',
     ...lines,
     '',
     'Si ya contestaste fuera del CRM, regístralo allí.',
     PIE_CRM,
-  ].join('\n');
+  ].join('\n'));
 }

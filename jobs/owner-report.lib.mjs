@@ -5,7 +5,7 @@
 // `propietario.informe` template and shown to the team on Telegram for
 // review. Nothing is sent to an owner — that is blocked on Meta approving the
 // template and on the jobs' chassis secret.
-import { ORIGEN_IMPORTADO, diaMadrid, escapeHtml, firstName } from './lib.mjs';
+import { ORIGEN_IMPORTADO, diaMadrid, escapeHtml, firstName, fitTelegram } from './lib.mjs';
 import { madridParts, monthNameEs, previousMonth } from './madrid.lib.mjs';
 import { render } from './campanas.lib.mjs';
 import { safeName } from './pb-helpers.lib.mjs';
@@ -120,5 +120,7 @@ export function textOwnerReports(drafts, template, label) {
     cur += `\n\n${footer}`;
   }
   chunks.push(cur);
-  return chunks;
+  // Already under MAX_MESSAGE by construction; the guard is the same last
+  // line of defence every E6 message has.
+  return chunks.map(fitTelegram);
 }

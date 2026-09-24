@@ -2,7 +2,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { consentRevoked, dormantLeads, reactivationProposals, textReactivation } from './reactivation.lib.mjs';
-import { MAX_LINES, PIE_CRM, normalizarLeads, vocabularioZonas } from './lib.mjs';
+import { MAX_LINES, MAX_MESSAGE_CHARS, PIE_CRM, normalizarLeads, vocabularioZonas } from './lib.mjs';
 
 const NOW = new Date('2026-09-28T08:00:00.000Z'); // Monday 10:00 Madrid
 const daysAgo = (d) => new Date(NOW - d * 86_400_000).toISOString().replace('T', ' ');
@@ -33,6 +33,12 @@ describe('dormantLeads', () => {
     assert.equal(consentRevoked(revoked), true);
     assert.equal(consentRevoked(never), false);
     assert.deepEqual(dormantLeads([revoked, never], NOW).map((l) => l.id), [never.id]);
+  });
+  it('a lead with any recent activity (an inbound too) is not dormant', () => {
+    const wrote = lead();
+    const silent = lead();
+    const out = dormantLeads([wrote, silent], NOW, { activeLeadIds: new Set([wrote.id]) });
+    assert.deepEqual(out.map((l) => l.id), [silent.id]);
   });
   it('falls back to created when never contacted', () => {
     const l = lead({ ultimo_contacto: '', created: daysAgo(45) });
@@ -81,6 +87,11 @@ describe('textReactivation', () => {
     assert.match(t, /• <b>Juan<\/b> · .* · Marta \(guardia\) · .* · 🚫 sin consentimiento/);
     assert.doesNotMatch(t, /López/);
     assert.ok(t.endsWith(`Propuesta para llamar: no se ha enviado nada a los leads.\n${PIE_CRM}`));
+  });
+  it('never exceeds the Telegram limit', () => {
+    const t = textReactivation(Array.from({ length: 10 }, () => prop({ motivos: ['z'.repeat(1000)] })), null, NOW);
+    assert.ok(t.length <= MAX_MESSAGE_CHARS);
+    assert.match(t, /^💤/);
   });
   it('caps the list', () => {
     const t = textReactivation(Array.from({ length: MAX_LINES + 2 }, () => prop()), null, NOW);

@@ -1,8 +1,8 @@
 // weekly-summary.lib.test.mjs — the Friday business summary rules.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { inWeek, isoWeek, textWeeklySummary, weekWindow, weeklySummary } from './weekly-summary.lib.mjs';
-import { PIE_CRM } from './lib.mjs';
+import { capOrigins, inWeek, isoWeek, textWeeklySummary, weekWindow, weeklySummary } from './weekly-summary.lib.mjs';
+import { MAX_MESSAGE_CHARS, PIE_CRM } from './lib.mjs';
 
 // Friday 2026-09-25 18:00 Madrid (CEST) = 16:00Z.
 const FRI = new Date('2026-09-25T16:00:00.000Z');
@@ -74,6 +74,7 @@ describe('weeklySummary', () => {
       { lead: 'l1', created: inside, direccion: 'saliente', tipo: 'nota' },
       { lead: 'l2', created: inside, direccion: 'entrante', tipo: 'whatsapp' },
       { lead: 'l2', created: outside, direccion: 'saliente', tipo: 'email' },
+      { lead: 'l2', created: inside, direccion: 'saliente', tipo: 'whatsapp', estado_envio: 'error' },
     ],
     visitas: [
       { created: outside, cuando: inside, resultado: 'realizada' },
@@ -104,7 +105,7 @@ describe('weeklySummary', () => {
     assert.ok(Object.hasOwn(s.por_origen, '__proto__'));
     assert.equal(Object.getPrototypeOf(s.por_origen), Object.prototype);
   });
-  it('notes are not contacts', () => {
+  it('notes and failed sends are not contacts', () => {
     assert.equal(s.contactos, 2);
     assert.deepEqual(s.contactos_por_canal, { whatsapp: 1, llamada: 1 });
     assert.equal(s.entrantes, 1);
@@ -130,7 +131,28 @@ describe('weeklySummary', () => {
   });
 });
 
+describe('capOrigins', () => {
+  it('keeps the top 6 and sums the rest into "otros"', () => {
+    assert.deepEqual(capOrigins({ a: 9, b: 8, c: 7, d: 6, e: 5, f: 4, g: 3, otros: 2, h: 1 }),
+      { a: 9, b: 8, c: 7, d: 6, e: 5, f: 4, otros: 6 });
+    assert.deepEqual(capOrigins({ a: 1, b: 1 }), { a: 1, b: 1 });
+  });
+  it('the payload is capped too', () => {
+    const leads = Array.from({ length: 20 }, (_, i) => ({ created: pb('2026-09-22T10:00:00.000Z'), origen: `o${i}` }));
+    const s = weeklySummary({ leads }, FRI);
+    assert.equal(Object.keys(s.por_origen).length, 7);
+    assert.equal(s.por_origen.otros, 14);
+    assert.equal(s.leads_nuevos, 20);
+  });
+});
+
 describe('textWeeklySummary', () => {
+  it('never exceeds the Telegram limit', () => {
+    const s = weeklySummary({}, FRI);
+    const t = textWeeklySummary({ ...s, embudo: Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`etapa-${'x'.repeat(30)}-${i}`, i])) });
+    assert.ok(t.length <= MAX_MESSAGE_CHARS);
+    assert.match(t, /^📊/);
+  });
   it('says a quiet week instead of staying silent', () => {
     const t = textWeeklySummary(weeklySummary({}, FRI));
     assert.match(t, /^📊 <b>Resumen de la semana<\/b> — semana 39 · /);
