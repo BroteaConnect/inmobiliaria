@@ -78,8 +78,7 @@ every E3 pull request was judged against is [docs/design-read.md](design-read.md
   `leads.ultimo_contacto`. La tarjeta muestra "hace X días", marca en ámbar
   los leads sin contacto >2 días (`desatendido()`) y despliega el historial.
 - **Email real con seguimiento**: el CRM llama a `POST
-  api.brotea.dev/send-email` (secreto compartido en `PUBLIC_OUTBOUND_SECRET`);
-  el chasis envía por Brevo con un Message-ID propio, registra la actividad y
+  api.brotea.dev/send-email`; el chasis envía por Brevo con un Message-ID propio, registra la actividad y
   Brevo devuelve los eventos a `POST /brevo-webhook`, que actualiza
   `estado_envio` (enviado→entregado→abierto→click, sin degradar).
   Las credenciales SMTP nunca llegan al navegador.
@@ -113,9 +112,26 @@ key.
 
 **No secrets in `settings`.** Every signed-in user can read the collection and
 the browser bundle is public. Credentials keep following the precedent of
-`enviarEmail`: the secret lives in the chassis and the browser only holds
-`PUBLIC_OUTBOUND_SECRET`. `settings` records *which* adapter is selected, never
-how to authenticate it.
+`enviarEmail`: the secret lives in the chassis, and the browser holds no shared
+secret at all — it calls the chassis with its own PocketBase user token (see
+*Chassis authentication* below). `settings` records *which* adapter is
+selected, never how to authenticate it.
+
+## Chassis authentication (2026-09-26)
+
+Until 2026-09-23 the CRM called the chassis (`/send-email`, `/send-whatsapp`,
+`/content/sync`) with a shared `PUBLIC_OUTBOUND_SECRET`. A `PUBLIC_` variable is
+compiled into the served JavaScript, so that secret was public. Since chassis
+#14 and the CRM's matching change, the browser sends `Authorization: Bearer
+<PocketBase user token>` and the chassis checks the user's role. The shared
+`?secret=` is for host processes only (the jobs), and a chassis refusal
+coded `secret_from_browser` means a bundle is leaking it again. Checked on
+2026-09-26: the served CRM bundle holds neither `OUTBOUND_SECRET` nor a
+`secret=` query.
+
+Twilio Content approval states reach `plantillas` without anyone calling
+`/content/sync`: the chassis reads them back itself every hour. The CRM's
+"check Twilio" button is still there for anyone who wants the state sooner.
 
 **A mock must say it is a mock.** Each integration is a port with a `mock` and a
 `live` adapter (`live` may be `null` — not built yet, and the Configuration
